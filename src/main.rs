@@ -136,8 +136,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
-        // Prefer non-sRGB format to avoid double gamma correction
-        // (our colors are already in sRGB space)
+        // Non-sRGB format — colors are passed through as-is in sRGB space.
         let format = caps
             .formats
             .iter()
@@ -465,6 +464,19 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 }
 
 fn main() {
+    // Disable macOS font smoothing for crisp glyph rendering (matches ghostty/alacritty)
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{ns_string, NSNumber, NSUserDefaults};
+        unsafe {
+            let defaults = NSUserDefaults::standardUserDefaults();
+            defaults.setObject_forKey(
+                Some(&NSNumber::new_i32(0)),
+                ns_string!("AppleFontSmoothing"),
+            );
+        }
+    }
+
     // Set up tokio runtime — needed for helix async operations (LSP, jobs, word index)
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let _guard = runtime.enter();

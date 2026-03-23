@@ -38,14 +38,12 @@ fn color_to_rgba(color: Color, default: [f32; 4]) -> [f32; 4] {
                 let c = ANSI_COLORS[n as usize];
                 (c[0], c[1], c[2])
             } else if n < 232 {
-                // 216-color cube: 6x6x6
                 let n = n - 16;
                 let b = (n % 6) * 51;
                 let g = ((n / 6) % 6) * 51;
                 let r = (n / 36) * 51;
                 (r, g, b)
             } else {
-                // 24 grayscale
                 let v = 8 + (n - 232) * 10;
                 (v, v, v)
             };
@@ -264,8 +262,11 @@ impl GlyphAtlas {
         // Convert bitmap to single-channel
         let alpha_data: Vec<u8> = match &glyph.buffer {
             BitmapBuffer::Rgb(data) => {
-                // Use luminance as alpha
-                data.chunks(3).map(|rgb| rgb[0]).collect()
+                // Average RGB channels for grayscale alpha
+                // (Core Text returns sub-pixel AA data; averaging gives correct coverage)
+                data.chunks(3)
+                    .map(|rgb| ((rgb[0] as u16 + rgb[1] as u16 + rgb[2] as u16) / 3) as u8)
+                    .collect()
             }
             BitmapBuffer::Rgba(data) => data.chunks(4).map(|rgba| rgba[3]).collect(),
         };
