@@ -2,6 +2,7 @@ mod app;
 mod backend;
 mod config;
 mod input;
+mod platform;
 mod renderer;
 
 use std::path::PathBuf;
@@ -21,8 +22,13 @@ use crate::backend::GpuBackend;
 use crate::renderer::Renderer;
 
 #[derive(Debug, Clone)]
-enum UserEvent {
+pub enum UserEvent {
     Redraw,
+    NewFile,
+    OpenFile(PathBuf),
+    OpenDirectory(PathBuf),
+    Save,
+    CloseBuffer,
 }
 
 struct WinitApp {
@@ -158,6 +164,13 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         let helide =
             HelideApp::new(gpu_backend, editor_config, files).expect("failed to init helide");
 
+        // Set up native macOS menu bar
+        #[cfg(target_os = "macos")]
+        {
+            platform::macos::set_event_proxy(self.proxy.clone());
+            platform::macos::setup_menu_bar();
+        }
+
         self.helide = Some(helide);
         self.window = Some(window);
 
@@ -177,14 +190,73 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         self.helide.as_mut().unwrap().render();
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: UserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         if event_loop.exiting() {
             return;
         }
-        if let Some(helide) = &mut self.helide {
-            let needs_render = helide.poll_editor_events();
-            if needs_render && !helide.editor.should_close() {
-                helide.render();
+        match event {
+            UserEvent::Redraw => {
+                if let Some(helide) = &mut self.helide {
+                    let needs_render = helide.poll_editor_events();
+                    if needs_render && !helide.editor.should_close() {
+                        helide.render();
+                    }
+                }
+            }
+            UserEvent::NewFile => {
+                if let Some(helide) = &mut self.helide {
+                    helide
+                        .editor
+                        .new_file(helix_view::editor::Action::VerticalSplit);
+                    helide.render();
+                }
+            }
+            UserEvent::OpenFile(path) => {
+                if let Some(helide) = &mut self.helide {
+                    if let Err(e) = helide
+                        .editor
+                        .open(&path, helix_view::editor::Action::VerticalSplit)
+                    {
+                        helide.editor.set_error(format!("Failed to open: {e}"));
+                    }
+                    helide.render();
+                }
+            }
+            UserEvent::OpenDirectory(path) => {
+                if let Some(helide) = &mut self.helide {
+                    if let Err(e) = helix_stdx::env::set_current_working_dir(&path) {
+                        helide
+                            .editor
+                            .set_error(format!("Failed to change directory: {e}"));
+                    } else {
+                        helide
+                            .editor
+                            .set_status(format!("Changed directory to {}", path.display()));
+                    }
+                    helide.render();
+                }
+            }
+            UserEvent::Save => {
+                if let Some(helide) = &mut self.helide {
+                    let doc_id = helix_view::doc!(helide.editor).id();
+                    let _ = helide.editor.save::<PathBuf>(doc_id, None, false);
+                    helide.render();
+                }
+            }
+            UserEvent::CloseBuffer => {
+                if let Some(helide) = &mut self.helide {
+                    let doc_id = helix_view::doc!(helide.editor).id();
+                    if let Err(_) = helide.editor.close_document(doc_id, false) {
+                        helide
+                            .editor
+                            .set_error("Buffer has unsaved changes".to_string());
+                    }
+                    if !helide.editor.should_close() {
+                        helide.render();
+                    } else {
+                        self.shutdown(event_loop);
+                    }
+                }
             }
         }
     }
