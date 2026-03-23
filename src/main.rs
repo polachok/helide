@@ -250,6 +250,33 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                     helide.handle_event(hx_event);
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                let should_open = path.is_file()
+                    && std::fs::metadata(&path)
+                        .map(|m| m.len() < 32 * 1024 * 1024) // skip files > 32MB
+                        .unwrap_or(false)
+                    && std::fs::read(&path)
+                        .map(|bytes| {
+                            let sample = &bytes[..bytes.len().min(8192)];
+                            content_inspector::inspect(sample).is_text()
+                        })
+                        .unwrap_or(false);
+
+                if should_open {
+                    if let Err(e) = helide
+                        .editor
+                        .open(&path, helix_view::editor::Action::VerticalSplit)
+                    {
+                        helide.editor.set_error(format!("Failed to open: {e}"));
+                    }
+                    helide.render();
+                } else {
+                    helide
+                        .editor
+                        .set_error(format!("Cannot open: {}", path.display()));
+                    helide.render();
+                }
+            }
             WindowEvent::Focused(focused) => {
                 let event = if focused {
                     Event::FocusGained

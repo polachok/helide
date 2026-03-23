@@ -33,4 +33,5 @@ pollster = "0.4"
 dirs = "6"
 which = "7"
 toml = "0.8"
+content_inspector = "0.2"
 serde = { version = "1", features = ["derive"] }
