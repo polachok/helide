@@ -357,6 +357,8 @@ pub struct Renderer {
     atlas_bind_group: wgpu::BindGroup,
     pub cell_width: f32,
     pub cell_height: f32,
+    pub padding_x: f32,
+    pub padding_y: f32,
     pub default_fg: [f32; 4],
     pub default_bg: [f32; 4],
 }
@@ -560,6 +562,10 @@ impl Renderer {
         let default_fg = [0.85, 0.85, 0.85, 1.0];
         let default_bg = [0.1, 0.1, 0.1, 1.0];
 
+        // Center the grid: distribute remainder pixels as padding
+        let padding_x = (config.width as f32 % cell_width) / 2.0;
+        let padding_y = (config.height as f32 % cell_height) / 2.0;
+
         Renderer {
             device,
             queue,
@@ -573,6 +579,8 @@ impl Renderer {
             atlas_bind_group,
             cell_width,
             cell_height,
+            padding_x,
+            padding_y,
             default_fg,
             default_bg,
         }
@@ -592,6 +600,9 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        self.padding_x = (width as f32 % self.cell_width) / 2.0;
+        self.padding_y = (height as f32 % self.cell_height) / 2.0;
     }
 
     pub fn render_grid(
@@ -627,8 +638,8 @@ impl Renderer {
                 let idx = (row as usize) * (cols as usize) + (col as usize);
                 let cell = &grid[idx];
 
-                let px = col as f32 * self.cell_width;
-                let py = row as f32 * self.cell_height;
+                let px = self.padding_x + col as f32 * self.cell_width;
+                let py = self.padding_y + row as f32 * self.cell_height;
 
                 let modifier = cell.modifier;
                 let reversed = modifier.contains(Modifier::REVERSED);
