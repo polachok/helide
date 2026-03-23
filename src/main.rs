@@ -454,6 +454,10 @@ fn main() {
     // Search order: helix/runtime in cwd (dev), ~/.config/helix/runtime, next to `hx` binary
     if std::env::var("HELIX_RUNTIME").is_err() {
         let candidates: Vec<PathBuf> = [
+            // macOS app bundle: Contents/Resources/runtime
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent()?.parent().map(|d| d.join("Resources/runtime"))),
             // Development: helix clone in cwd
             std::env::current_dir()
                 .ok()

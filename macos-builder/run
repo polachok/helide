@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+set -e
+
+TARGET="helide"
+BUNDLE_BINARY_NAME="Helide"
+HELIX_DIR="${HELIX_DIR:-helix}"
+
+if [ -n "$1" ]; then
+  TARGET_ARCHITECTURE=$1
+fi
+
+RELEASE_DIR=${TARGET_ARCHITECTURE:+target/${TARGET_ARCHITECTURE}/release}
+RELEASE_DIR=${RELEASE_DIR:-target/release}
+RELEASE_BINARY="${RELEASE_DIR}/${TARGET}"
+
+# --- Step 1: Build grammars if needed ---
+HELIX_RUNTIME="${HELIX_DIR}/runtime"
+if [ ! -d "${HELIX_RUNTIME}/queries" ]; then
+  echo "ERROR: Helix runtime not found at '${HELIX_RUNTIME}'."
+  echo "Clone helix first: git clone https://github.com/helix-editor/helix"
+  exit 1
+fi
+
+GRAMMAR_DIR="${HELIX_RUNTIME}/grammars"
+# Check if grammars are built (look for .so or .dylib files)
+GRAMMAR_COUNT=$(find "${GRAMMAR_DIR}" -name "*.so" -o -name "*.dylib" 2>/dev/null | wc -l | tr -d ' ')
+if [ "${GRAMMAR_COUNT}" -lt 10 ]; then
+  echo "Fetching tree-sitter grammars from git..."
+  (cd "${HELIX_DIR}" && cargo run -- --grammar fetch)
+  echo "Building tree-sitter grammars (this may take a few minutes)..."
+  (cd "${HELIX_DIR}" && cargo run -- --grammar build)
+  echo "Grammars built."
+fi
+
+# --- Step 2: Build helide ---
+if [ ! -f "${RELEASE_BINARY}" ] || [ "$REBUILD" == "true" ]; then
+  echo "Building release binary..."
+  cargo build --release ${TARGET_ARCHITECTURE:+--target "${TARGET_ARCHITECTURE}"}
+fi
+
+# --- Step 3: Create .app bundle ---
+EXTRAS_DIR="extra"
+BUNDLE_DIR="${RELEASE_DIR}/bundle"
+
+APP_NAME="Helide.app"
+APP_TEMPLATE="${EXTRAS_DIR}/osx/${APP_NAME}"
+APP_DIR="${BUNDLE_DIR}/osx"
+APP_BINARY_DIR="${APP_DIR}/${APP_NAME}/Contents/MacOS"
+APP_RESOURCES_DIR="${APP_DIR}/${APP_NAME}/Contents/Resources"
+
+DMG_NAME="Helide${TARGET_ARCHITECTURE:+-${TARGET_ARCHITECTURE}}.dmg"
+DMG_VOLNAME="Helide"
+
+echo "Creating ${APP_NAME}..."
+rm -rf "${APP_DIR}/${APP_NAME}"
+mkdir -p "${APP_BINARY_DIR}"
+mkdir -p "${APP_RESOURCES_DIR}"
+cp -fRp "${APP_TEMPLATE}/Contents/Info.plist" "${APP_DIR}/${APP_NAME}/Contents/"
+cp -fp "${RELEASE_BINARY}" "${APP_BINARY_DIR}/${BUNDLE_BINARY_NAME}"
+
+# Copy icon if it exists
+if [ -f "${APP_TEMPLATE}/Contents/Resources/Helide.icns" ]; then
+  cp -fp "${APP_TEMPLATE}/Contents/Resources/Helide.icns" "${APP_RESOURCES_DIR}/"
+fi
+
+# --- Step 4: Bundle helix runtime ---
+echo "Bundling helix runtime..."
+mkdir -p "${APP_RESOURCES_DIR}/runtime"
+
+# Static files: themes, queries, tutor
+cp -fRp "${HELIX_RUNTIME}/themes" "${APP_RESOURCES_DIR}/runtime/"
+cp -fRp "${HELIX_RUNTIME}/queries" "${APP_RESOURCES_DIR}/runtime/"
+[ -f "${HELIX_RUNTIME}/tutor" ] && cp -fp "${HELIX_RUNTIME}/tutor" "${APP_RESOURCES_DIR}/runtime/"
+
+# Compiled grammars (only .so/.dylib, skip sources)
+if [ -d "${GRAMMAR_DIR}" ]; then
+  mkdir -p "${APP_RESOURCES_DIR}/runtime/grammars"
+  find "${GRAMMAR_DIR}" -maxdepth 1 \( -name "*.so" -o -name "*.dylib" \) \
+    -exec cp -fp {} "${APP_RESOURCES_DIR}/runtime/grammars/" \;
+fi
+
+# languages.toml (language config — lives at repo root, not runtime/)
+if [ -f "${HELIX_DIR}/languages.toml" ]; then
+  cp -fp "${HELIX_DIR}/languages.toml" "${APP_RESOURCES_DIR}/runtime/"
+fi
+
+RUNTIME_SIZE=$(du -sh "${APP_RESOURCES_DIR}/runtime" | cut -f1)
+echo "Bundled runtime (${RUNTIME_SIZE})"
+
+touch -r "${RELEASE_BINARY}" "${APP_DIR}/${APP_NAME}"
+echo "Created '${APP_DIR}/${APP_NAME}'"
+
+# --- Step 5: Code signing (optional) ---
+if [ -n "$DEVELOPER_ID" ]; then
+  echo "Signing with '${DEVELOPER_ID}'..."
+  codesign --force --options runtime --deep --sign "${DEVELOPER_ID}" "${APP_DIR}/${APP_NAME}"
+  echo "Signed."
+fi
+
+# --- Step 6: Create DMG (optional) ---
+if [ "$GENERATE_DMG" == "true" ]; then
+  echo "Creating DMG..."
+  rm -f "${APP_DIR}/${DMG_NAME}"
+
+  if command -v create-dmg &> /dev/null; then
+    create-dmg \
+      --volname "${DMG_VOLNAME}" \
+      --window-size 600 400 \
+      --icon-size 80 \
+      --icon "Helide.app" 200 250 \
+      --app-drop-link 400 250 \
+      "${APP_DIR}/${DMG_NAME}" \
+      "${APP_DIR}/${APP_NAME}"
+  else
+    hdiutil create -volname "${DMG_VOLNAME}" \
+      -srcfolder "${APP_DIR}/${APP_NAME}" \
+      -ov -format UDZO "${APP_DIR}/${DMG_NAME}"
+  fi
+
+  echo "Created '${APP_DIR}/${DMG_NAME}'"
+fi
+
+echo ""
+echo "Done."
+echo "  App: ${APP_DIR}/${APP_NAME}"
+if [ "$GENERATE_DMG" == "true" ]; then
+  echo "  DMG: ${APP_DIR}/${DMG_NAME}"
+fi
