@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.87"
 
 [[bin]]
-name = "helide"
+name = "Helide"
 path = "src/main.rs"
 
 [dependencies]
