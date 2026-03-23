@@ -34,7 +34,7 @@ dirs = "6"
 which = "7"
 toml = "0.8"
 content_inspector = "0.2"
-rfd = "0.15"
+arboard = "3"
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -29,6 +29,9 @@ pub enum UserEvent {
     OpenDirectory(PathBuf),
     Save,
     CloseBuffer,
+    Undo,
+    Redo,
+    Paste,
 }
 
 struct WinitApp {
@@ -241,6 +244,32 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                     let doc_id = helix_view::doc!(helide.editor).id();
                     let _ = helide.editor.save::<PathBuf>(doc_id, None, false);
                     helide.render();
+                }
+            }
+            UserEvent::Undo => {
+                if let Some(helide) = &mut self.helide {
+                    let (view, doc) = helix_view::current!(helide.editor);
+                    doc.undo(view);
+                    helide.render();
+                }
+            }
+            UserEvent::Redo => {
+                if let Some(helide) = &mut self.helide {
+                    let (view, doc) = helix_view::current!(helide.editor);
+                    doc.redo(view);
+                    helide.render();
+                }
+            }
+            UserEvent::Paste => {
+                // Event::Paste is helix's proper API for OS-level paste
+                if let Some(helide) = &mut self.helide {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Ok(text) = clipboard.get_text() {
+                            if !text.is_empty() {
+                                helide.handle_event(Event::Paste(text));
+                            }
+                        }
+                    }
                 }
             }
             UserEvent::CloseBuffer => {

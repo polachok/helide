@@ -101,6 +101,21 @@ declare_class!(
         fn close_buffer(&self, _sender: *mut NSObject) {
             send_event(UserEvent::CloseBuffer);
         }
+
+        #[method(helideUndo:)]
+        fn undo(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::Undo);
+        }
+
+        #[method(helideRedo:)]
+        fn redo(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::Redo);
+        }
+
+        #[method(helidePaste:)]
+        fn paste(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::Paste);
+        }
     }
 );
 
@@ -141,7 +156,7 @@ pub fn setup_menu_bar() {
         main_menu.addItem(&file_menu_item);
 
         // Edit menu
-        let edit_menu = create_edit_menu(mtm);
+        let edit_menu = create_edit_menu(mtm, &handler);
         let edit_menu_item = NSMenuItem::new(mtm);
         edit_menu_item.setSubmenu(Some(&edit_menu));
         main_menu.addItem(&edit_menu_item);
@@ -267,49 +282,32 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     menu
 }
 
-unsafe fn create_edit_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+unsafe fn create_edit_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     menu.setTitle(ns_string!("Edit"));
 
     let undo = NSMenuItem::new(mtm);
     undo.setTitle(ns_string!("Undo"));
     undo.setKeyEquivalent(ns_string!("z"));
-    undo.setAction(Some(sel!(undo:)));
+    undo.setAction(Some(sel!(helideUndo:)));
+    undo.setTarget(Some(handler));
     menu.addItem(&undo);
 
     let redo = NSMenuItem::new(mtm);
     redo.setTitle(ns_string!("Redo"));
     redo.setKeyEquivalent(ns_string!("Z"));
-    redo.setAction(Some(sel!(redo:)));
+    redo.setAction(Some(sel!(helideRedo:)));
+    redo.setTarget(Some(handler));
     menu.addItem(&redo);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-    let cut = NSMenuItem::new(mtm);
-    cut.setTitle(ns_string!("Cut"));
-    cut.setKeyEquivalent(ns_string!("x"));
-    cut.setAction(Some(sel!(cut:)));
-    menu.addItem(&cut);
-
-    let copy = NSMenuItem::new(mtm);
-    copy.setTitle(ns_string!("Copy"));
-    copy.setKeyEquivalent(ns_string!("c"));
-    copy.setAction(Some(sel!(copy:)));
-    menu.addItem(&copy);
-
     let paste = NSMenuItem::new(mtm);
     paste.setTitle(ns_string!("Paste"));
     paste.setKeyEquivalent(ns_string!("v"));
-    paste.setAction(Some(sel!(paste:)));
+    paste.setAction(Some(sel!(helidePaste:)));
+    paste.setTarget(Some(handler));
     menu.addItem(&paste);
-
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-    let select_all = NSMenuItem::new(mtm);
-    select_all.setTitle(ns_string!("Select All"));
-    select_all.setKeyEquivalent(ns_string!("a"));
-    select_all.setAction(Some(sel!(selectAll:)));
-    menu.addItem(&select_all);
 
     menu
 }
