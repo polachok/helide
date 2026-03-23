@@ -381,7 +381,7 @@ impl Renderer {
             .rasterizer
             .metrics(atlas.regular_key, Size::new(font_size))
             .expect("failed to get font metrics");
-        let cell_width = metrics.average_advance as f32;
+        let cell_width = (metrics.average_advance as f32).ceil();
         let cell_height = metrics.line_height as f32;
 
         // Uniforms
