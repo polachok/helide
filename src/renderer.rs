@@ -359,6 +359,7 @@ pub struct Renderer {
     pub cell_height: f32,
     pub padding_x: f32,
     pub padding_y: f32,
+    pub padding_top: f32,
     pub default_fg: [f32; 4],
     pub default_bg: [f32; 4],
 }
@@ -563,8 +564,9 @@ impl Renderer {
         let default_bg = [0.1, 0.1, 0.1, 1.0];
 
         // Center the grid: distribute remainder pixels as padding
+        let padding_top = 0.0; // set via set_padding_top() for transparent titlebar
         let padding_x = (config.width as f32 % cell_width) / 2.0;
-        let padding_y = (config.height as f32 % cell_height) / 2.0;
+        let padding_y = ((config.height as f32 - padding_top) % cell_height) / 2.0 + padding_top;
 
         Renderer {
             device,
@@ -581,9 +583,14 @@ impl Renderer {
             cell_height,
             padding_x,
             padding_y,
+            padding_top,
             default_fg,
             default_bg,
         }
+    }
+
+    pub fn set_padding_top(&mut self, padding: f32) {
+        self.padding_top = padding;
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -602,7 +609,8 @@ impl Renderer {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         self.padding_x = (width as f32 % self.cell_width) / 2.0;
-        self.padding_y = (height as f32 % self.cell_height) / 2.0;
+        self.padding_y =
+            ((height as f32 - self.padding_top) % self.cell_height) / 2.0 + self.padding_top;
     }
 
     pub fn render_grid(

@@ -91,9 +91,18 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             return;
         }
 
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("helide")
             .with_inner_size(winit::dpi::LogicalSize::new(1200.0, 800.0));
+
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attrs = attrs
+                .with_titlebar_transparent(true)
+                .with_fullsize_content_view(true);
+        }
+
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
         // Create wgpu surface + device
@@ -150,7 +159,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         let helide_config = crate::config::HelideConfig::load();
         let scale_factor = window.scale_factor() as f32;
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             device,
             queue,
             surface,
@@ -158,6 +167,14 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             &helide_config.font.family,
             helide_config.font.size * scale_factor,
         );
+
+        // On macOS with transparent titlebar, add top padding for the titlebar
+        #[cfg(target_os = "macos")]
+        {
+            let titlebar_height = 28.0 * scale_factor; // standard macOS titlebar
+            renderer.set_padding_top(titlebar_height);
+        }
+
         let gpu_backend = GpuBackend::new(renderer);
 
         // Load helix config
