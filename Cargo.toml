@@ -1,0 +1,30 @@
+[package]
+name = "helide"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+
+[[bin]]
+name = "helide"
+path = "src/main.rs"
+
+[dependencies]
+helix-term = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-tui = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-view = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-core = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-lsp = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-loader = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-event = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+
+winit = "0.30"
+wgpu = "24"
+crossfont = "0.9"
+
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+futures-util = { version = "0.3", features = ["std", "async-await"], default-features = false }
+arc-swap = "1.8"
+log = "0.4"
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
