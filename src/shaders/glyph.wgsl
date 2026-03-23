@@ -48,6 +48,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let alpha = textureSample(atlas_texture, atlas_sampler, in.tex_coord).r;
+    let raw_alpha = textureSample(atlas_texture, atlas_sampler, in.tex_coord).r;
+    // Apply gamma to counteract macOS font smoothing weight.
+    // Higher values = thinner glyphs. 1.5-1.8 matches ghostty/alacritty.
+    let alpha = pow(raw_alpha, 1.4);
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
