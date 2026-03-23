@@ -46,8 +46,25 @@ impl WinitApp {
     }
 
     fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
-        // Drop helide app (and all wgpu resources) before exiting the event loop
-        self.helide.take();
+        if let Some(mut helide) = self.helide.take() {
+            // Graceful shutdown: flush writes, close LSP servers, finish jobs
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                if let Err(err) = helide
+                    .jobs
+                    .finish(&mut helide.editor, Some(&mut helide.compositor))
+                    .await
+                {
+                    log::error!("Error finishing jobs: {err}");
+                }
+                if let Err(err) = helide.editor.flush_writes().await {
+                    log::error!("Error flushing writes: {err}");
+                }
+                if helide.editor.close_language_servers(None).await.is_err() {
+                    log::error!("Timed out waiting for language servers to shutdown");
+                }
+            });
+        }
         self.window.take();
         event_loop.exit();
     }
