@@ -1,5 +1,6 @@
 mod app;
 mod backend;
+mod config;
 mod input;
 mod renderer;
 
@@ -138,8 +139,16 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
+        let helide_config = crate::config::HelideConfig::load();
         let scale_factor = window.scale_factor() as f32;
-        let renderer = Renderer::new(device, queue, surface, config, 14.0 * scale_factor);
+        let renderer = Renderer::new(
+            device,
+            queue,
+            surface,
+            config,
+            &helide_config.font.family,
+            helide_config.font.size * scale_factor,
+        );
         let gpu_backend = GpuBackend::new(renderer);
 
         // Load helix config

@@ -100,7 +100,12 @@ pub struct GlyphAtlas {
 }
 
 impl GlyphAtlas {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, font_size: f32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        font_family: &str,
+        font_size: f32,
+    ) -> Self {
         let atlas_width = 2048u32;
         let atlas_height = 2048u32;
 
@@ -152,7 +157,7 @@ impl GlyphAtlas {
 
         let size = Size::new(font_size);
         let regular_desc = FontDesc::new(
-            "monospace",
+            font_family,
             Style::Description {
                 slant: Slant::Normal,
                 weight: Weight::Normal,
@@ -163,7 +168,7 @@ impl GlyphAtlas {
             .expect("failed to load regular font");
 
         let bold_desc = FontDesc::new(
-            "monospace",
+            font_family,
             Style::Description {
                 slant: Slant::Normal,
                 weight: Weight::Bold,
@@ -172,7 +177,7 @@ impl GlyphAtlas {
         let bold_key = rasterizer.load_font(&bold_desc, size).ok();
 
         let italic_desc = FontDesc::new(
-            "monospace",
+            font_family,
             Style::Description {
                 slant: Slant::Italic,
                 weight: Weight::Normal,
@@ -181,7 +186,7 @@ impl GlyphAtlas {
         let italic_key = rasterizer.load_font(&italic_desc, size).ok();
 
         let bold_italic_desc = FontDesc::new(
-            "monospace",
+            font_family,
             Style::Description {
                 slant: Slant::Italic,
                 weight: Weight::Bold,
@@ -362,9 +367,10 @@ impl Renderer {
         queue: Arc<wgpu::Queue>,
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
+        font_family: &str,
         font_size: f32,
     ) -> Self {
-        let atlas = GlyphAtlas::new(&device, &queue, font_size);
+        let atlas = GlyphAtlas::new(&device, &queue, font_family, font_size);
 
         // Get cell metrics from font
         let metrics = atlas
