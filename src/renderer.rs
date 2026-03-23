@@ -13,21 +13,21 @@ use helix_view::graphics::{Color, CursorKind, Modifier};
 /// Extended 216-color cube + 24 grayscale are computed algorithmically.
 const ANSI_COLORS: [[u8; 3]; 16] = [
     [0, 0, 0],       // Black
-    [205, 49, 49],    // Red
-    [13, 188, 121],   // Green
-    [229, 229, 16],   // Yellow
-    [36, 114, 200],   // Blue
-    [188, 63, 188],   // Magenta
-    [17, 168, 205],   // Cyan
-    [229, 229, 229],  // White (light gray)
-    [102, 102, 102],  // Bright black (dark gray)
-    [241, 76, 76],    // Bright red
-    [35, 209, 139],   // Bright green
-    [245, 245, 67],   // Bright yellow
-    [59, 142, 234],   // Bright blue
-    [214, 112, 214],  // Bright magenta
-    [41, 184, 219],   // Bright cyan
-    [255, 255, 255],  // Bright white
+    [205, 49, 49],   // Red
+    [13, 188, 121],  // Green
+    [229, 229, 16],  // Yellow
+    [36, 114, 200],  // Blue
+    [188, 63, 188],  // Magenta
+    [17, 168, 205],  // Cyan
+    [229, 229, 229], // White (light gray)
+    [102, 102, 102], // Bright black (dark gray)
+    [241, 76, 76],   // Bright red
+    [35, 209, 139],  // Bright green
+    [245, 245, 67],  // Bright yellow
+    [59, 142, 234],  // Bright blue
+    [214, 112, 214], // Bright magenta
+    [41, 184, 219],  // Bright cyan
+    [255, 255, 255], // Bright white
 ];
 
 fn color_to_rgba(color: Color, default: [f32; 4]) -> [f32; 4] {
@@ -149,18 +149,42 @@ impl GlyphAtlas {
         let mut rasterizer = Rasterizer::new().expect("failed to create rasterizer");
 
         let size = Size::new(font_size);
-        let regular_desc = FontDesc::new("monospace", Style::Description { slant: Slant::Normal, weight: Weight::Normal });
+        let regular_desc = FontDesc::new(
+            "monospace",
+            Style::Description {
+                slant: Slant::Normal,
+                weight: Weight::Normal,
+            },
+        );
         let regular_key = rasterizer
             .load_font(&regular_desc, size)
             .expect("failed to load regular font");
 
-        let bold_desc = FontDesc::new("monospace", Style::Description { slant: Slant::Normal, weight: Weight::Bold });
+        let bold_desc = FontDesc::new(
+            "monospace",
+            Style::Description {
+                slant: Slant::Normal,
+                weight: Weight::Bold,
+            },
+        );
         let bold_key = rasterizer.load_font(&bold_desc, size).ok();
 
-        let italic_desc = FontDesc::new("monospace", Style::Description { slant: Slant::Italic, weight: Weight::Normal });
+        let italic_desc = FontDesc::new(
+            "monospace",
+            Style::Description {
+                slant: Slant::Italic,
+                weight: Weight::Normal,
+            },
+        );
         let italic_key = rasterizer.load_font(&italic_desc, size).ok();
 
-        let bold_italic_desc = FontDesc::new("monospace", Style::Description { slant: Slant::Italic, weight: Weight::Bold });
+        let bold_italic_desc = FontDesc::new(
+            "monospace",
+            Style::Description {
+                slant: Slant::Italic,
+                weight: Weight::Bold,
+            },
+        );
         let bold_italic_key = rasterizer.load_font(&bold_italic_desc, size).ok();
 
         GlyphAtlas {
@@ -192,11 +216,7 @@ impl GlyphAtlas {
         }
     }
 
-    fn rasterize_and_upload(
-        &mut self,
-        queue: &wgpu::Queue,
-        glyph_key: GlyphKey,
-    ) -> AtlasEntry {
+    fn rasterize_and_upload(&mut self, queue: &wgpu::Queue, glyph_key: GlyphKey) -> AtlasEntry {
         let glyph = self
             .rasterizer
             .get_glyph(glyph_key)
@@ -231,9 +251,7 @@ impl GlyphAtlas {
                 // Use luminance as alpha
                 data.chunks(3).map(|rgb| rgb[0]).collect()
             }
-            BitmapBuffer::Rgba(data) => {
-                data.chunks(4).map(|rgba| rgba[3]).collect()
-            }
+            BitmapBuffer::Rgba(data) => data.chunks(4).map(|rgba| rgba[3]).collect(),
         };
 
         queue.write_texture(
@@ -675,13 +693,13 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        let glyph_buffer =
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("glyph_instances"),
-                    contents: bytemuck::cast_slice(&glyph_instances),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
+        let glyph_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("glyph_instances"),
+                contents: bytemuck::cast_slice(&glyph_instances),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
 
         let mut encoder = self
             .device

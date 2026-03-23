@@ -38,7 +38,7 @@ impl App {
         let title_style = Style::default()
             .fg(helix_view::graphics::Color::Black)
             .bg(helix_view::graphics::Color::Rgb(100, 149, 237));
-        buf.set_string(0, 0, &" ".repeat(size.width as usize), title_style);
+        buf.set_string(0, 0, " ".repeat(size.width as usize), title_style);
         buf.set_string(2, 0, " helide - GPU-accelerated Helix ", title_style);
 
         // Editor content
@@ -70,7 +70,7 @@ impl App {
 
         // Fill background
         for row in 1..size.height {
-            buf.set_string(0, row, &" ".repeat(size.width as usize), normal);
+            buf.set_string(0, row, " ".repeat(size.width as usize), normal);
         }
 
         // Line numbers + code
@@ -82,7 +82,7 @@ impl App {
             let ln_style = Style::default()
                 .fg(helix_view::graphics::Color::Rgb(133, 133, 133))
                 .bg(helix_view::graphics::Color::Rgb(30, 30, 30));
-            buf.set_string(0, row, &format!(" {:>3} ", i + 1), ln_style);
+            buf.set_string(0, row, format!(" {:>3} ", i + 1), ln_style);
 
             if line.starts_with("//") {
                 buf.set_string(5, row, line, comment_style);
@@ -116,7 +116,7 @@ impl App {
         buf.set_string(
             0,
             status_row,
-            &" ".repeat(size.width as usize),
+            " ".repeat(size.width as usize),
             status_style,
         );
         buf.set_string(1, status_row, " NOR ", status_style);
