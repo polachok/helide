@@ -103,9 +103,12 @@ if [ "$GENERATE_DMG" == "true" ]; then
   echo "Creating DMG..."
   rm -f "${APP_DIR}/${DMG_NAME}"
 
+  DMG_ICNS="${APP_RESOURCES_DIR}/Helide.icns"
+
   if command -v create-dmg &> /dev/null; then
     create-dmg \
       --volname "${DMG_VOLNAME}" \
+      ${DMG_ICNS:+--volicon "${DMG_ICNS}"} \
       --window-size 600 400 \
       --icon-size 80 \
       --icon "Helide.app" 200 250 \
