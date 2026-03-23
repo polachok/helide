@@ -244,6 +244,9 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                 helide.poll_editor_events();
                 if !helide.editor.should_close() {
                     helide.render();
+                    if let Some(window) = &self.window {
+                        window.set_title(&helide.title());
+                    }
                 }
             }
             _ => {}

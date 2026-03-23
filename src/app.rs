@@ -176,6 +176,21 @@ impl HelideApp {
         self.terminal.draw(pos, kind).unwrap();
     }
 
+    /// Returns the title string based on the focused document.
+    pub fn title(&self) -> String {
+        let (_view, doc) = helix_view::current_ref!(&self.editor);
+        let name = doc
+            .path()
+            .map(|p| {
+                helix_stdx::path::get_relative_path(p)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| "[scratch]".into());
+        let modified = if doc.is_modified() { " [+]" } else { "" };
+        format!("{name}{modified} - helide")
+    }
+
     /// Poll editor async events (LSP, jobs, saves) using tokio.
     /// Returns true if a redraw is needed.
     pub fn poll_editor_events(&mut self) -> bool {
