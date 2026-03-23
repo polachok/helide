@@ -1,56 +1,76 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::{mpsc, LazyLock};
 
 use objc2::rc::Retained;
-use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use objc2::runtime::{AnyClass, AnyObject, ClassBuilder};
+use objc2::{define_class, msg_send, sel, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel,
 };
-use objc2_foundation::{ns_string, MainThreadMarker, NSObject, NSProcessInfo};
+use objc2_foundation::{
+    ns_string, MainThreadMarker, NSArray, NSDictionary, NSObject, NSProcessInfo, NSString,
+    NSUserDefaults,
+};
 use winit::event_loop::EventLoopProxy;
 
 use crate::UserEvent;
 
-thread_local! {
-    static EVENT_PROXY: RefCell<Option<EventLoopProxy<UserEvent>>> = const { RefCell::new(None) };
+/// Channel for sending events from objc callbacks to the winit event loop.
+/// The sender lives in static storage (used by objc handlers),
+/// the receiver is drained by flush_pending_files().
+static OPEN_FILE_TX: LazyLock<mpsc::Sender<PathBuf>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel();
+    // Store receiver in a separate static
+    *OPEN_FILE_RX.lock().unwrap() = Some(rx);
+    tx
+});
+static OPEN_FILE_RX: LazyLock<std::sync::Mutex<Option<mpsc::Receiver<PathBuf>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+static EVENT_PROXY: LazyLock<std::sync::Mutex<Option<EventLoopProxy<UserEvent>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(None));
+
+pub fn set_event_proxy(proxy: EventLoopProxy<UserEvent>) {
+    *EVENT_PROXY.lock().unwrap() = Some(proxy);
 }
 
-/// Store the event loop proxy so menu handlers can send events.
-pub fn set_event_proxy(proxy: EventLoopProxy<UserEvent>) {
-    EVENT_PROXY.with(|cell| {
-        *cell.borrow_mut() = Some(proxy);
-    });
+/// Drain any file paths received from objc handlers and send them as UserEvents.
+pub fn flush_pending_files() {
+    let proxy = EVENT_PROXY.lock().unwrap();
+    let Some(proxy) = proxy.as_ref() else { return };
+
+    if let Some(rx) = OPEN_FILE_RX.lock().unwrap().as_ref() {
+        while let Ok(path) = rx.try_recv() {
+            let _ = proxy.send_event(UserEvent::OpenFile(path));
+        }
+    }
 }
 
 fn send_event(event: UserEvent) {
-    EVENT_PROXY.with(|cell| {
-        if let Some(proxy) = cell.borrow().as_ref() {
-            let _ = proxy.send_event(event);
-        }
-    });
+    let proxy = EVENT_PROXY.lock().unwrap();
+    if let Some(proxy) = proxy.as_ref() {
+        let _ = proxy.send_event(event);
+    } else if let UserEvent::OpenFile(path) = event {
+        // Proxy not ready yet — queue via channel
+        let _ = OPEN_FILE_TX.send(path);
+    }
 }
 
 // Menu action handler
-declare_class!(
+define_class!(
+    #[derive(Debug)]
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
     struct MenuHandler;
 
-    unsafe impl ClassType for MenuHandler {
-        type Super = NSObject;
-        type Mutability = mutability::InteriorMutable;
-        const NAME: &'static str = "HelideMenuHandler";
-    }
-
-    impl DeclaredClass for MenuHandler {
-        type Ivars = ();
-    }
-
-    unsafe impl MenuHandler {
-        #[method(newFile:)]
+    impl MenuHandler {
+        #[unsafe(method(newFile:))]
         fn new_file(&self, _sender: *mut NSObject) {
             send_event(UserEvent::NewFile);
         }
 
-        #[method(openFile:)]
+        #[unsafe(method(openFile:))]
         fn open_file(&self, _sender: *mut NSObject) {
             let mtm = MainThreadMarker::new().unwrap();
             unsafe {
@@ -70,7 +90,7 @@ declare_class!(
             }
         }
 
-        #[method(openDirectory:)]
+        #[unsafe(method(openDirectory:))]
         fn open_directory(&self, _sender: *mut NSObject) {
             let mtm = MainThreadMarker::new().unwrap();
             unsafe {
@@ -92,32 +112,32 @@ declare_class!(
             }
         }
 
-        #[method(saveFile:)]
+        #[unsafe(method(saveFile:))]
         fn save_file(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Save);
         }
 
-        #[method(closeBuffer:)]
+        #[unsafe(method(closeBuffer:))]
         fn close_buffer(&self, _sender: *mut NSObject) {
             send_event(UserEvent::CloseBuffer);
         }
 
-        #[method(helideUndo:)]
+        #[unsafe(method(helideUndo:))]
         fn undo(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Undo);
         }
 
-        #[method(helideRedo:)]
+        #[unsafe(method(helideRedo:))]
         fn redo(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Redo);
         }
 
-        #[method(helidePaste:)]
+        #[unsafe(method(helidePaste:))]
         fn paste(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Paste);
         }
 
-        #[method(helideTutor:)]
+        #[unsafe(method(helideTutor:))]
         fn tutor(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Tutor);
         }
@@ -126,8 +146,7 @@ declare_class!(
 
 impl MenuHandler {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let alloc = mtm.alloc::<Self>().set_ivars(());
-        unsafe { msg_send_id![super(alloc), init] }
+        unsafe { msg_send![Self::alloc(mtm), init] }
     }
 }
 
@@ -145,7 +164,6 @@ pub fn setup_menu_bar() {
     unsafe {
         let main_menu = NSMenu::new(mtm);
 
-        // App menu
         let app_menu = create_app_menu(mtm);
         let app_menu_item = NSMenuItem::new(mtm);
         app_menu_item.setSubmenu(Some(&app_menu));
@@ -154,26 +172,22 @@ pub fn setup_menu_bar() {
         }
         main_menu.addItem(&app_menu_item);
 
-        // File menu
         let file_menu = create_file_menu(mtm, &handler);
         let file_menu_item = NSMenuItem::new(mtm);
         file_menu_item.setSubmenu(Some(&file_menu));
         main_menu.addItem(&file_menu_item);
 
-        // Edit menu
         let edit_menu = create_edit_menu(mtm, &handler);
         let edit_menu_item = NSMenuItem::new(mtm);
         edit_menu_item.setSubmenu(Some(&edit_menu));
         main_menu.addItem(&edit_menu_item);
 
-        // Window menu
         let win_menu = create_window_menu(mtm);
         let win_menu_item = NSMenuItem::new(mtm);
         win_menu_item.setSubmenu(Some(&win_menu));
         main_menu.addItem(&win_menu_item);
         app.setWindowsMenu(Some(&win_menu));
 
-        // Help menu
         let help_menu = create_help_menu(mtm, &handler);
         let help_menu_item = NSMenuItem::new(mtm);
         help_menu_item.setSubmenu(Some(&help_menu));
@@ -216,10 +230,8 @@ unsafe fn create_app_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let hide_others = NSMenuItem::new(mtm);
     hide_others.setTitle(ns_string!("Hide Others"));
     hide_others.setKeyEquivalent(ns_string!("h"));
-    hide_others.setKeyEquivalentModifierMask(
-        NSEventModifierFlags::NSEventModifierFlagOption
-            | NSEventModifierFlags::NSEventModifierFlagCommand,
-    );
+    hide_others
+        .setKeyEquivalentModifierMask(NSEventModifierFlags::Option | NSEventModifierFlags::Command);
     hide_others.setAction(Some(sel!(hideOtherApplications:)));
     menu.addItem(&hide_others);
 
@@ -338,8 +350,7 @@ unsafe fn create_window_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     fullscreen.setTitle(ns_string!("Enter Full Screen"));
     fullscreen.setKeyEquivalent(ns_string!("f"));
     fullscreen.setKeyEquivalentModifierMask(
-        NSEventModifierFlags::NSEventModifierFlagControl
-            | NSEventModifierFlags::NSEventModifierFlagCommand,
+        NSEventModifierFlags::Control | NSEventModifierFlags::Command,
     );
     fullscreen.setAction(Some(sel!(toggleFullScreen:)));
     menu.addItem(&fullscreen);
@@ -358,4 +369,46 @@ unsafe fn create_help_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     menu.addItem(&tutor);
 
     menu
+}
+
+/// Register `application:openFiles:` on winit's NSApplicationDelegate.
+/// Matches neovide's approach: subclass the delegate and swap the isa.
+/// Call AFTER EventLoop::build() but BEFORE run_app().
+pub fn register_open_file_handler() {
+    unsafe extern "C-unwind" fn handle_open_files(
+        _this: &mut AnyObject,
+        _sel: objc2::runtime::Sel,
+        _sender: &AnyObject,
+        filenames: &NSArray<NSString>,
+    ) {
+        for filename in filenames.iter() {
+            send_event(UserEvent::OpenFile(PathBuf::from(filename.to_string())));
+        }
+    }
+
+    let mtm = MainThreadMarker::new().expect("must be called on main thread");
+
+    unsafe {
+        let app = NSApplication::sharedApplication(mtm);
+        let delegate = app.delegate().unwrap();
+
+        let class: &AnyClass = AnyObject::class(delegate.as_ref());
+
+        let mut my_class = ClassBuilder::new(c"HelideApplicationDelegate", class).unwrap();
+        my_class.add_method(
+            sel!(application:openFiles:),
+            handle_open_files as unsafe extern "C-unwind" fn(_, _, _, _) -> _,
+        );
+        let class = my_class.register();
+
+        AnyObject::set_class(delegate.as_ref(), class);
+    }
+
+    // Prevent AppKit from interpreting our command line args as files to open
+    let keys = &[ns_string!("NSTreatUnknownArgumentsAsOpen")];
+    let objects = &[ns_string!("NO") as &AnyObject];
+    let dict = NSDictionary::from_slices(keys, objects);
+    unsafe {
+        NSUserDefaults::standardUserDefaults().registerDefaults(&dict);
+    }
 }

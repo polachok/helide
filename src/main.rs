@@ -189,10 +189,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         // Set up native macOS menu bar
         #[cfg(target_os = "macos")]
-        {
-            platform::macos::set_event_proxy(self.proxy.clone());
-            platform::macos::setup_menu_bar();
-        }
+        platform::macos::setup_menu_bar();
 
         self.helide = Some(helide);
         self.window = Some(window);
@@ -211,6 +208,10 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         // Initial render
         self.helide.as_mut().unwrap().render();
+
+        // Flush any files received via Apple Event during startup
+        #[cfg(target_os = "macos")]
+        platform::macos::flush_pending_files();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -219,6 +220,10 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         }
         match event {
             UserEvent::Redraw => {
+                // Flush any pending Apple Event file opens
+                #[cfg(target_os = "macos")]
+                platform::macos::flush_pending_files();
+
                 if let Some(helide) = &mut self.helide {
                     let needs_render = helide.poll_editor_events();
                     if needs_render && !helide.editor.should_close() {
@@ -491,6 +496,14 @@ fn main() {
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     let proxy = event_loop.create_proxy();
+
+    // Set up macOS: proxy early for queuing, then register handler (delegate exists after build())
+    #[cfg(target_os = "macos")]
+    {
+        platform::macos::set_event_proxy(proxy.clone());
+        platform::macos::register_open_file_handler();
+    }
+
     let mut app = WinitApp::new(files, proxy);
     event_loop.run_app(&mut app).unwrap();
 }

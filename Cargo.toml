@@ -38,6 +38,6 @@ arboard = "3"
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSProcessInfo", "NSURL"] }
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSMenu", "NSMenuItem", "NSEvent", "NSResponder", "NSRunningApplication", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSWindow"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSProcessInfo", "NSURL", "NSArray", "NSObject", "NSDictionary", "NSUserDefaults"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSMenu", "NSMenuItem", "NSEvent", "NSResponder", "NSRunningApplication", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSWindow"] }
