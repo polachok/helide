@@ -95,6 +95,8 @@ pub struct GlyphAtlas {
     bold_key: Option<FontKey>,
     italic_key: Option<FontKey>,
     bold_italic_key: Option<FontKey>,
+    font_size: Size,
+    pub ascent: f32,
 }
 
 impl GlyphAtlas {
@@ -141,8 +143,8 @@ impl GlyphAtlas {
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -187,6 +189,13 @@ impl GlyphAtlas {
         );
         let bold_italic_key = rasterizer.load_font(&bold_italic_desc, size).ok();
 
+        // Get ascent from font metrics for proper baseline positioning
+        // descent is typically negative, ascent = line_height + descent
+        let metrics = rasterizer
+            .metrics(regular_key, size)
+            .expect("failed to get font metrics");
+        let ascent = (metrics.line_height as f32) + metrics.descent;
+
         GlyphAtlas {
             texture,
             view,
@@ -202,6 +211,8 @@ impl GlyphAtlas {
             bold_key,
             italic_key,
             bold_italic_key,
+            font_size: size,
+            ascent,
         }
     }
 
@@ -644,13 +655,15 @@ impl Renderer {
                     let glyph_key = GlyphKey {
                         font_key,
                         character: ch,
-                        size: Size::new(0.0), // uses loaded size
+                        size: self.atlas.font_size,
                     };
 
                     let entry = self.atlas.get_or_insert(&self.queue, glyph_key);
                     if entry.width > 0.0 {
+                        // Position glyph relative to baseline
+                        // baseline is at py + ascent, glyph top is at baseline - top
                         let gx = px + entry.left;
-                        let gy = py + (self.cell_height - entry.top);
+                        let gy = py + self.atlas.ascent - entry.top;
 
                         glyph_instances.push(GlyphInstance {
                             pos: [gx, gy],

@@ -32,8 +32,17 @@ impl GpuBackend {
         }
     }
 
-    pub fn renderer_mut(&mut self) -> &mut Renderer {
-        &mut self.renderer
+    pub fn cell_width(&self) -> f32 {
+        self.renderer.cell_width
+    }
+
+    pub fn cell_height(&self) -> f32 {
+        self.renderer.cell_height
+    }
+
+    pub fn set_default_colors(&mut self, fg: [f32; 4], bg: [f32; 4]) {
+        self.renderer.default_fg = fg;
+        self.renderer.default_bg = bg;
     }
 
     /// Recalculate grid dimensions after a window resize.
