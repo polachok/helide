@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
 use helix_term::config::Config;
@@ -19,22 +19,29 @@ use crate::app::HelideApp;
 use crate::backend::GpuBackend;
 use crate::renderer::Renderer;
 
+#[derive(Debug, Clone)]
+enum UserEvent {
+    Redraw,
+}
+
 struct WinitApp {
     window: Option<Arc<Window>>,
     helide: Option<HelideApp>,
     cursor_position: (f64, f64),
     modifiers: winit::event::Modifiers,
     files: Vec<PathBuf>,
+    proxy: EventLoopProxy<UserEvent>,
 }
 
 impl WinitApp {
-    fn new(files: Vec<PathBuf>) -> Self {
+    fn new(files: Vec<PathBuf>, proxy: EventLoopProxy<UserEvent>) -> Self {
         WinitApp {
             window: None,
             helide: None,
             cursor_position: (0.0, 0.0),
             modifiers: winit::event::Modifiers::default(),
             files,
+            proxy,
         }
     }
 
@@ -51,7 +58,7 @@ impl WinitApp {
     }
 }
 
-impl ApplicationHandler for WinitApp {
+impl ApplicationHandler<UserEvent> for WinitApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -128,8 +135,32 @@ impl ApplicationHandler for WinitApp {
         self.helide = Some(helide);
         self.window = Some(window);
 
+        // Spawn a periodic redraw timer for LSP spinners and async updates
+        let proxy = self.proxy.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                if proxy.send_event(UserEvent::Redraw).is_err() {
+                    break; // event loop closed
+                }
+            }
+        });
+
         // Initial render
         self.helide.as_mut().unwrap().render();
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: UserEvent) {
+        if event_loop.exiting() {
+            return;
+        }
+        if let Some(helide) = &mut self.helide {
+            let needs_render = helide.poll_editor_events();
+            if needs_render && !helide.editor.should_close() {
+                helide.render();
+            }
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -260,7 +291,8 @@ fn main() {
     // Parse CLI args: helide [files...]
     let files: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
 
-    let event_loop = EventLoop::new().unwrap();
-    let mut app = WinitApp::new(files);
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+    let proxy = event_loop.create_proxy();
+    let mut app = WinitApp::new(files, proxy);
     event_loop.run_app(&mut app).unwrap();
 }

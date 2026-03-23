@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use helix_lsp::{lsp, LanguageServerId, LspProgressMap};
+use helix_lsp::{lsp, lsp::notification::Notification as _, LanguageServerId, LspProgressMap};
 use helix_term::compositor::{Compositor, Context, Event};
 use helix_term::config::Config;
 use helix_term::job::Jobs;
@@ -176,22 +176,27 @@ impl HelideApp {
         self.terminal.draw(pos, kind).unwrap();
     }
 
-    /// Poll editor async events (LSP responses, jobs, etc.)
+    /// Poll editor async events (LSP, jobs, saves) using tokio.
     /// Returns true if a redraw is needed.
     pub fn poll_editor_events(&mut self) -> bool {
-        use futures_util::Stream;
-        use std::task::{Context as TaskContext, Poll};
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(self.poll_editor_events_async())
+    }
+
+    async fn poll_editor_events_async(&mut self) -> bool {
+        use futures_util::StreamExt;
+        use tokio::time::{timeout, Duration};
 
         let mut needs_render = false;
 
-        // Process pending job callbacks
+        // Process pending job callbacks (sync channel)
         while let Ok(callback) = self.jobs.callbacks.try_recv() {
             self.jobs
                 .handle_callback(&mut self.editor, &mut self.compositor, Ok(Some(callback)));
             needs_render = true;
         }
 
-        // Process status messages
+        // Process status messages (sync channel)
         while let Ok(msg) = self.jobs.status_messages.try_recv() {
             use helix_core::diagnostic::Severity;
             let severity = match msg.severity {
@@ -204,39 +209,47 @@ impl HelideApp {
             needs_render = true;
         }
 
-        // Poll wait_futures (FuturesUnordered stream)
-        let waker = futures_util::task::noop_waker();
-        let mut cx = TaskContext::from_waker(&waker);
-        while let Poll::Ready(Some(callback)) =
-            std::pin::Pin::new(&mut self.jobs.wait_futures).poll_next(&mut cx)
-        {
-            self.jobs
-                .handle_callback(&mut self.editor, &mut self.compositor, callback);
-            needs_render = true;
-        }
+        // Drain all ready async events with a short timeout
+        let deadline = Duration::from_millis(5);
+        let _ = timeout(deadline, async {
+            loop {
+                tokio::select! {
+                    biased;
 
-        // Poll LSP incoming messages
-        while let Poll::Ready(Some((server_id, call))) =
-            std::pin::Pin::new(&mut self.editor.language_servers.incoming).poll_next(&mut cx)
-        {
-            self.handle_language_server_message(call, server_id);
-            needs_render = true;
-        }
+                    Some(callback) = self.jobs.wait_futures.next() => {
+                        self.jobs.handle_callback(
+                            &mut self.editor,
+                            &mut self.compositor,
+                            callback,
+                        );
+                        needs_render = true;
+                    }
 
-        // Poll document save events
-        while let Poll::Ready(Some(event)) =
-            std::pin::Pin::new(&mut self.editor.save_queue).poll_next(&mut cx)
-        {
-            self.editor.write_count -= 1;
-            self.handle_document_saved(event);
-            needs_render = true;
-        }
+                    Some((server_id, call)) = self.editor.language_servers.incoming.next() => {
+                        self.handle_language_server_message(call, server_id).await;
+                        needs_render = true;
+                    }
+
+                    Some(event) = self.editor.save_queue.next() => {
+                        self.editor.write_count -= 1;
+                        self.handle_document_write(event);
+                        needs_render = true;
+                    }
+
+                    else => break,
+                }
+            }
+        })
+        .await;
 
         needs_render
     }
 
-    fn handle_document_saved(&mut self, event: helix_view::document::DocumentSavedEventResult) {
-        let doc_save_event = match event {
+    fn handle_document_write(
+        &mut self,
+        doc_save_event: helix_view::document::DocumentSavedEventResult,
+    ) {
+        let doc_save_event = match doc_save_event {
             Ok(event) => event,
             Err(err) => {
                 self.editor.set_error(err.to_string());
@@ -251,15 +264,41 @@ impl HelideApp {
 
         doc.set_last_saved_revision(doc_save_event.revision, doc_save_event.save_time);
 
-        let path = doc_save_event.path;
-        doc.set_path(Some(&path));
+        let lines = doc_save_event.text.len_lines();
+        let bytes = doc_save_event.text.len_bytes();
+        let size_str = if bytes < 1024 {
+            format!("{bytes}B")
+        } else {
+            let mut size = bytes as f32;
+            let suffixes = ["B", "KiB", "MiB", "GiB"];
+            let mut i = 0;
+            while i < suffixes.len() - 1 && size >= 1024.0 {
+                size /= 1024.0;
+                i += 1;
+            }
+            format!("{size:.1}{}", suffixes[i])
+        };
+
+        self.editor
+            .set_doc_path(doc_save_event.doc_id, &doc_save_event.path);
         self.editor.set_status(format!(
-            "'{}' written",
-            helix_stdx::path::get_relative_path(&path).display()
+            "'{}' written, {lines}L {size_str}",
+            helix_stdx::path::get_relative_path(&doc_save_event.path).to_string_lossy(),
         ));
     }
 
-    fn handle_language_server_message(
+    fn handle_show_message(&mut self, typ: lsp::MessageType, message: String) {
+        if self.config.load().editor.lsp.display_messages {
+            match typ {
+                lsp::MessageType::ERROR => self.editor.set_error(message),
+                lsp::MessageType::WARNING => self.editor.set_warning(message),
+                _ => self.editor.set_status(message),
+            }
+        }
+    }
+
+    /// Ported from helix-term Application::handle_language_server_message
+    async fn handle_language_server_message(
         &mut self,
         call: helix_lsp::Call,
         server_id: LanguageServerId,
@@ -282,7 +321,10 @@ impl HelideApp {
             Call::Notification(helix_lsp::jsonrpc::Notification { method, params, .. }) => {
                 let notification = match Notification::parse(&method, params) {
                     Ok(notification) => notification,
-                    Err(helix_lsp::Error::Unhandled) => return,
+                    Err(helix_lsp::Error::Unhandled) => {
+                        log::info!("Ignoring unhandled LSP notification");
+                        return;
+                    }
                     Err(err) => {
                         log::error!("Ignoring unknown LSP notification: {}", err);
                         return;
@@ -310,6 +352,10 @@ impl HelideApp {
                         };
                         let language_server = language_server!();
                         if !language_server.is_initialized() {
+                            log::error!(
+                                "Discarding publishDiagnostic from uninitialized server: {}",
+                                language_server.name()
+                            );
                             return;
                         }
                         let provider = helix_core::diagnostic::DiagnosticProvider::Lsp {
@@ -324,14 +370,7 @@ impl HelideApp {
                         );
                     }
                     Notification::ShowMessage(params) => {
-                        use helix_core::diagnostic::Severity;
-                        let severity = match params.typ {
-                            lsp::MessageType::ERROR => Severity::Error,
-                            lsp::MessageType::WARNING => Severity::Warning,
-                            lsp::MessageType::INFO => Severity::Info,
-                            _ => Severity::Hint,
-                        };
-                        self.editor.status_msg = Some((params.message.into(), severity));
+                        self.handle_show_message(params.typ, params.message);
                     }
                     Notification::LogMessage(params) => {
                         log::info!("window/logMessage: {:?}", params);
@@ -351,69 +390,61 @@ impl HelideApp {
                             .find::<ui::EditorView>()
                             .expect("expected EditorView");
 
-                        match &work {
-                            lsp::WorkDoneProgress::End(lsp::WorkDoneProgressEnd {
-                                message: None,
-                            }) => {
+                        let (title, message, percentage) = match &work {
+                            lsp::WorkDoneProgress::Begin(b) => {
+                                (Some(b.title.as_str()), &b.message, &b.percentage)
+                            }
+                            lsp::WorkDoneProgress::Report(r) => (None, &r.message, &r.percentage),
+                            lsp::WorkDoneProgress::End(lsp::WorkDoneProgressEnd { message }) => {
+                                if message.is_some() {
+                                    (None, message, &None)
+                                } else {
+                                    self.lsp_progress.end_progress(server_id, &token);
+                                    if !self.lsp_progress.is_progressing(server_id) {
+                                        editor_view.spinners_mut().get_or_create(server_id).stop();
+                                    }
+                                    self.editor.clear_status();
+                                    return;
+                                }
+                            }
+                        };
+
+                        if self.editor.config().lsp.display_progress_messages {
+                            let title = title.or_else(|| {
+                                self.lsp_progress
+                                    .title(server_id, &token)
+                                    .map(|s| s.as_str())
+                            });
+                            if title.is_some() || percentage.is_some() || message.is_some() {
+                                use std::fmt::Write as _;
+                                let mut status = format!("{}: ", language_server!().name());
+                                if let Some(pct) = percentage {
+                                    write!(status, "{pct:>2}% ").unwrap();
+                                }
+                                if let Some(title) = title {
+                                    status.push_str(title);
+                                }
+                                if title.is_some() && message.is_some() {
+                                    status.push_str(" ⋅ ");
+                                }
+                                if let Some(msg) = message {
+                                    status.push_str(msg);
+                                }
+                                self.editor.set_status(status);
+                            }
+                        }
+
+                        match work {
+                            lsp::WorkDoneProgress::Begin(begin) => {
+                                self.lsp_progress.begin(server_id, token.clone(), begin);
+                            }
+                            lsp::WorkDoneProgress::Report(report) => {
+                                self.lsp_progress.update(server_id, token.clone(), report);
+                            }
+                            lsp::WorkDoneProgress::End(_) => {
                                 self.lsp_progress.end_progress(server_id, &token);
                                 if !self.lsp_progress.is_progressing(server_id) {
                                     editor_view.spinners_mut().get_or_create(server_id).stop();
-                                }
-                                self.editor.clear_status();
-                            }
-                            _ => {
-                                let (title, message, percentage) = match &work {
-                                    lsp::WorkDoneProgress::Begin(b) => {
-                                        (Some(b.title.as_str()), &b.message, &b.percentage)
-                                    }
-                                    lsp::WorkDoneProgress::Report(r) => {
-                                        (None, &r.message, &r.percentage)
-                                    }
-                                    lsp::WorkDoneProgress::End(e) => (None, &e.message, &None),
-                                };
-
-                                if self.editor.config().lsp.display_progress_messages {
-                                    let title = title.or_else(|| {
-                                        self.lsp_progress
-                                            .title(server_id, &token)
-                                            .map(|s| s.as_str())
-                                    });
-                                    if title.is_some() || percentage.is_some() || message.is_some()
-                                    {
-                                        use std::fmt::Write as _;
-                                        let mut status = format!("{}: ", language_server!().name());
-                                        if let Some(pct) = percentage {
-                                            write!(status, "{pct:>2}% ").unwrap();
-                                        }
-                                        if let Some(title) = title {
-                                            status.push_str(title);
-                                        }
-                                        if title.is_some() && message.is_some() {
-                                            status.push_str(" ⋅ ");
-                                        }
-                                        if let Some(msg) = message {
-                                            status.push_str(msg);
-                                        }
-                                        self.editor.set_status(status);
-                                    }
-                                }
-
-                                match work {
-                                    lsp::WorkDoneProgress::Begin(begin) => {
-                                        self.lsp_progress.begin(server_id, token.clone(), begin);
-                                    }
-                                    lsp::WorkDoneProgress::Report(report) => {
-                                        self.lsp_progress.update(server_id, token.clone(), report);
-                                    }
-                                    lsp::WorkDoneProgress::End(_) => {
-                                        self.lsp_progress.end_progress(server_id, &token);
-                                        if !self.lsp_progress.is_progressing(server_id) {
-                                            editor_view
-                                                .spinners_mut()
-                                                .get_or_create(server_id)
-                                                .stop();
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -447,11 +478,7 @@ impl HelideApp {
             }) => {
                 let reply = match MethodCall::parse(&method, params) {
                     Err(helix_lsp::Error::Unhandled) => {
-                        log::error!(
-                            "Language Server: Method {} not found in request {}",
-                            method,
-                            id
-                        );
+                        log::error!("Language Server: Method {method} not found in request {id}");
                         Err(helix_lsp::jsonrpc::Error {
                             code: helix_lsp::jsonrpc::ErrorCode::MethodNotFound,
                             message: format!("Method not found: {method}"),
@@ -459,7 +486,7 @@ impl HelideApp {
                         })
                     }
                     Err(err) => {
-                        log::error!("Language Server: Malformed method call {}: {}", method, err);
+                        log::error!("Language Server: Malformed method call {method}: {err}");
                         Err(helix_lsp::jsonrpc::Error {
                             code: helix_lsp::jsonrpc::ErrorCode::ParseError,
                             message: format!("Malformed method call: {method}"),
@@ -468,7 +495,6 @@ impl HelideApp {
                     }
                     Ok(MethodCall::WorkDoneProgressCreate(params)) => {
                         self.lsp_progress.create(server_id, params.token);
-
                         let editor_view = self
                             .compositor
                             .find::<ui::EditorView>()
@@ -481,56 +507,118 @@ impl HelideApp {
                     }
                     Ok(MethodCall::ApplyWorkspaceEdit(params)) => {
                         let language_server = language_server!();
-                        let offset_encoding = language_server.offset_encoding();
-                        let applied = self
-                            .editor
-                            .apply_workspace_edit(offset_encoding, &params.edit)
-                            .is_ok();
-                        Ok(serde_json::json!({ "applied": applied }))
+                        if language_server.is_initialized() {
+                            let offset_encoding = language_server.offset_encoding();
+                            let res = self
+                                .editor
+                                .apply_workspace_edit(offset_encoding, &params.edit);
+                            Ok(serde_json::json!(lsp::ApplyWorkspaceEditResponse {
+                                applied: res.is_ok(),
+                                failure_reason: res.as_ref().err().map(|e| e.kind.to_string()),
+                                failed_change: res
+                                    .as_ref()
+                                    .err()
+                                    .map(|e| e.failed_change_idx as u32),
+                            }))
+                        } else {
+                            Err(helix_lsp::jsonrpc::Error {
+                                code: helix_lsp::jsonrpc::ErrorCode::InvalidRequest,
+                                message: "Server must be initialized to request workspace edits"
+                                    .to_string(),
+                                data: None,
+                            })
+                        }
                     }
-                    Ok(MethodCall::WorkspaceFolders) => {
-                        // workspace_folders() is async on the language server;
-                        // return empty for now in sync context
-                        Ok(serde_json::json!([]))
-                    }
+                    Ok(MethodCall::WorkspaceFolders) => Ok(serde_json::json!(
+                        &*language_server!().workspace_folders().await
+                    )),
                     Ok(MethodCall::WorkspaceConfiguration(params)) => {
+                        let language_server = language_server!();
                         let result: Vec<_> = params
                             .items
                             .iter()
                             .map(|item| {
-                                let Some(server) = self.editor.language_server_by_id(server_id)
-                                else {
-                                    return serde_json::Value::Null;
+                                let mut config = match language_server.config() {
+                                    Some(c) => c,
+                                    None => return serde_json::Value::Null,
                                 };
-                                let config = server.config();
-                                let val = item
-                                    .section
-                                    .as_deref()
-                                    .and_then(|section| {
-                                        config.as_ref().and_then(|c| {
-                                            c.pointer(&format!("/{}", section.replace('.', "/")))
-                                                .cloned()
-                                        })
-                                    })
-                                    .unwrap_or_default();
-                                val
+                                if let Some(section) = item.section.as_ref() {
+                                    if !section.is_empty() {
+                                        for part in section.split('.') {
+                                            config = match config.get(part) {
+                                                Some(c) => c,
+                                                None => return serde_json::Value::Null,
+                                            };
+                                        }
+                                    }
+                                }
+                                config.clone()
                             })
                             .collect();
                         Ok(serde_json::json!(result))
                     }
-                    Ok(MethodCall::RegisterCapability(_)) => Ok(serde_json::Value::Null),
-                    Ok(MethodCall::UnregisterCapability(_)) => Ok(serde_json::Value::Null),
-                    Ok(MethodCall::ShowDocument(_)) => Ok(serde_json::json!({ "success": false })),
-                    Ok(MethodCall::WorkspaceDiagnosticRefresh) => Ok(serde_json::Value::Null),
-                    Ok(MethodCall::ShowMessageRequest(_)) => Ok(serde_json::Value::Null),
+                    Ok(MethodCall::RegisterCapability(params)) => {
+                        if let Some(client) = self.editor.language_servers.get_by_id(server_id) {
+                            for reg in params.registrations {
+                                if reg.method == lsp::notification::DidChangeWatchedFiles::METHOD {
+                                    if let Some(options) = reg.register_options {
+                                        if let Ok(ops) =
+                                            serde_json::from_value::<
+                                                lsp::DidChangeWatchedFilesRegistrationOptions,
+                                            >(options)
+                                        {
+                                            self.editor
+                                                .language_servers
+                                                .file_event_handler
+                                                .register(
+                                                    client.id(),
+                                                    std::sync::Arc::downgrade(client),
+                                                    reg.id,
+                                                    ops,
+                                                );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(serde_json::Value::Null)
+                    }
+                    Ok(MethodCall::UnregisterCapability(params)) => {
+                        for unreg in params.unregisterations {
+                            if unreg.method == lsp::notification::DidChangeWatchedFiles::METHOD {
+                                self.editor
+                                    .language_servers
+                                    .file_event_handler
+                                    .unregister(server_id, unreg.id);
+                            }
+                        }
+                        Ok(serde_json::Value::Null)
+                    }
+                    Ok(MethodCall::ShowDocument(_params)) => {
+                        // TODO: implement show document
+                        Ok(serde_json::json!(lsp::ShowDocumentResult {
+                            success: false
+                        }))
+                    }
+                    Ok(MethodCall::WorkspaceDiagnosticRefresh) => {
+                        // TODO: trigger pull diagnostics
+                        Ok(serde_json::Value::Null)
+                    }
+                    Ok(MethodCall::ShowMessageRequest(params)) => {
+                        self.handle_show_message(params.typ, params.message);
+                        Ok(serde_json::Value::Null)
+                    }
                 };
 
                 let language_server = language_server!();
-                let _ = language_server.reply(id, reply);
+                if let Err(err) = language_server.reply(id.clone(), reply) {
+                    log::error!(
+                        "Failed to send reply to server '{}' request {id}: {err}",
+                        language_server.name()
+                    );
+                }
             }
-            Call::Invalid { id } => {
-                log::error!("LSP: invalid request id={id}");
-            }
+            Call::Invalid { id } => log::error!("LSP invalid method call id={id:?}"),
         }
     }
 }
