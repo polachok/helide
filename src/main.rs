@@ -41,6 +41,7 @@ struct WinitApp {
     modifiers: winit::event::Modifiers,
     files: Vec<PathBuf>,
     proxy: EventLoopProxy<UserEvent>,
+    scroll: input::ScrollAccumulator,
 }
 
 impl WinitApp {
@@ -52,6 +53,7 @@ impl WinitApp {
             modifiers: winit::event::Modifiers::default(),
             files,
             proxy,
+            scroll: input::ScrollAccumulator::new(),
         }
     }
 
@@ -362,9 +364,10 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell_size = Self::cell_size(helide);
-                if let Some(hx_event) =
-                    input::convert_scroll(delta, self.cursor_position, cell_size, &self.modifiers)
-                {
+                let events =
+                    self.scroll
+                        .accumulate(delta, self.cursor_position, cell_size, &self.modifiers);
+                for hx_event in events {
                     helide.handle_event(hx_event);
                 }
             }

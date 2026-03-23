@@ -132,30 +132,122 @@ pub fn convert_mouse_press(
     }))
 }
 
-/// Convert winit scroll event to helix mouse scroll event.
-pub fn convert_scroll(
-    delta: MouseScrollDelta,
+/// Scroll accumulator for smooth pixel-based scrolling.
+/// Accumulates pixel deltas and only emits scroll events per cell height.
+pub struct ScrollAccumulator {
+    dx: f32,
+    dy: f32,
+}
+
+impl ScrollAccumulator {
+    pub fn new() -> Self {
+        ScrollAccumulator { dx: 0.0, dy: 0.0 }
+    }
+
+    /// Accumulate a scroll delta. Returns scroll events to emit (may be 0 or more).
+    pub fn accumulate(
+        &mut self,
+        delta: MouseScrollDelta,
+        cursor_pos: (f64, f64),
+        cell_size: (f32, f32),
+        modifiers: &winit::event::Modifiers,
+    ) -> Vec<Event> {
+        match delta {
+            MouseScrollDelta::LineDelta(x, y) => {
+                // Line deltas: emit directly, one event per line
+                let mut events = Vec::new();
+                let count_y = y.abs().ceil() as usize;
+                let count_x = x.abs().ceil() as usize;
+
+                let kind_y = if y > 0.0 {
+                    Some(MouseEventKind::ScrollUp)
+                } else if y < 0.0 {
+                    Some(MouseEventKind::ScrollDown)
+                } else {
+                    None
+                };
+                let kind_x = if x > 0.0 {
+                    Some(MouseEventKind::ScrollRight)
+                } else if x < 0.0 {
+                    Some(MouseEventKind::ScrollLeft)
+                } else {
+                    None
+                };
+
+                let (col, row, mods) = event_params(cursor_pos, cell_size, modifiers);
+
+                if let Some(kind) = kind_y {
+                    for _ in 0..count_y {
+                        events.push(Event::Mouse(MouseEvent {
+                            kind,
+                            column: col,
+                            row,
+                            modifiers: mods,
+                        }));
+                    }
+                }
+                if let Some(kind) = kind_x {
+                    for _ in 0..count_x {
+                        events.push(Event::Mouse(MouseEvent {
+                            kind,
+                            column: col,
+                            row,
+                            modifiers: mods,
+                        }));
+                    }
+                }
+                events
+            }
+            MouseScrollDelta::PixelDelta(pos) => {
+                self.dx += pos.x as f32;
+                self.dy += pos.y as f32;
+
+                let mut events = Vec::new();
+                let threshold = cell_size.1; // one cell height per scroll event
+
+                let (col, row, mods) = event_params(cursor_pos, cell_size, modifiers);
+
+                while self.dy.abs() >= threshold {
+                    let kind = if self.dy > 0.0 {
+                        MouseEventKind::ScrollUp
+                    } else {
+                        MouseEventKind::ScrollDown
+                    };
+                    events.push(Event::Mouse(MouseEvent {
+                        kind,
+                        column: col,
+                        row,
+                        modifiers: mods,
+                    }));
+                    self.dy -= threshold.copysign(self.dy);
+                }
+
+                while self.dx.abs() >= threshold {
+                    let kind = if self.dx > 0.0 {
+                        MouseEventKind::ScrollRight
+                    } else {
+                        MouseEventKind::ScrollLeft
+                    };
+                    events.push(Event::Mouse(MouseEvent {
+                        kind,
+                        column: col,
+                        row,
+                        modifiers: mods,
+                    }));
+                    self.dx -= threshold.copysign(self.dx);
+                }
+
+                events
+            }
+        }
+    }
+}
+
+fn event_params(
     cursor_pos: (f64, f64),
     cell_size: (f32, f32),
     modifiers: &winit::event::Modifiers,
-) -> Option<Event> {
-    let (dx, dy) = match delta {
-        MouseScrollDelta::LineDelta(x, y) => (x, y),
-        MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / 20.0, pos.y as f32 / 20.0),
-    };
-
-    let kind = if dy.abs() > dx.abs() {
-        if dy > 0.0 {
-            MouseEventKind::ScrollUp
-        } else {
-            MouseEventKind::ScrollDown
-        }
-    } else if dx > 0.0 {
-        MouseEventKind::ScrollRight
-    } else {
-        MouseEventKind::ScrollLeft
-    };
-
+) -> (u16, u16, KeyModifiers) {
     let col = (cursor_pos.0 as f32 / cell_size.0) as u16;
     let row = (cursor_pos.1 as f32 / cell_size.1) as u16;
 
@@ -170,11 +262,5 @@ pub fn convert_scroll(
     if mod_state.alt_key() {
         mods.insert(KeyModifiers::ALT);
     }
-
-    Some(Event::Mouse(MouseEvent {
-        kind,
-        column: col,
-        row,
-        modifiers: mods,
-    }))
+    (col, row, mods)
 }
