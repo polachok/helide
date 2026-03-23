@@ -343,6 +343,20 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         match event {
             WindowEvent::CloseRequested => {
+                // macOS behavior: hide window if no unsaved changes, keep app in dock
+                #[cfg(target_os = "macos")]
+                {
+                    let has_unsaved = helide.editor.documents().any(|doc| doc.is_modified());
+                    if has_unsaved {
+                        helide
+                            .editor
+                            .set_error("Unsaved changes. Use :w to save or :q! to force quit.");
+                        helide.render();
+                    } else if let Some(window) = &self.window {
+                        window.set_visible(false);
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
                 self.shutdown(event_loop);
             }
             WindowEvent::Resized(size) => {

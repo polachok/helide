@@ -386,6 +386,23 @@ pub fn register_open_file_handler() {
         }
     }
 
+    unsafe extern "C-unwind" fn handle_reopen(
+        _this: &mut AnyObject,
+        _sel: objc2::runtime::Sel,
+        _sender: &AnyObject,
+        has_visible: objc2::runtime::Bool,
+    ) -> objc2::runtime::Bool {
+        if !has_visible.as_bool() {
+            // Show all windows when dock icon is clicked with no visible windows
+            let mtm = MainThreadMarker::new().unwrap();
+            let app = NSApplication::sharedApplication(mtm);
+            for window in app.windows().iter() {
+                window.makeKeyAndOrderFront(None);
+            }
+        }
+        objc2::runtime::Bool::YES
+    }
+
     let mtm = MainThreadMarker::new().expect("must be called on main thread");
 
     unsafe {
@@ -398,6 +415,10 @@ pub fn register_open_file_handler() {
         my_class.add_method(
             sel!(application:openFiles:),
             handle_open_files as unsafe extern "C-unwind" fn(_, _, _, _) -> _,
+        );
+        my_class.add_method(
+            sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+            handle_reopen as unsafe extern "C-unwind" fn(_, _, _, _) -> _,
         );
         let class = my_class.register();
 
