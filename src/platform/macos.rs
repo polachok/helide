@@ -116,6 +116,11 @@ declare_class!(
         fn paste(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Paste);
         }
+
+        #[method(helideTutor:)]
+        fn tutor(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::Tutor);
+        }
     }
 );
 
@@ -169,7 +174,7 @@ pub fn setup_menu_bar() {
         app.setWindowsMenu(Some(&win_menu));
 
         // Help menu
-        let help_menu = create_help_menu(mtm);
+        let help_menu = create_help_menu(mtm, &handler);
         let help_menu_item = NSMenuItem::new(mtm);
         help_menu_item.setSubmenu(Some(&help_menu));
         main_menu.addItem(&help_menu_item);
@@ -342,8 +347,15 @@ unsafe fn create_window_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu
 }
 
-unsafe fn create_help_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+unsafe fn create_help_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     menu.setTitle(ns_string!("Help"));
+
+    let tutor = NSMenuItem::new(mtm);
+    tutor.setTitle(ns_string!("Helix Tutor"));
+    tutor.setAction(Some(sel!(helideTutor:)));
+    tutor.setTarget(Some(handler));
+    menu.addItem(&tutor);
+
     menu
 }

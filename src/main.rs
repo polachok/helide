@@ -32,6 +32,7 @@ pub enum UserEvent {
     Undo,
     Redo,
     Paste,
+    Tutor,
 }
 
 struct WinitApp {
@@ -289,6 +290,22 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                             }
                         }
                     }
+                }
+            }
+            UserEvent::Tutor => {
+                if let Some(helide) = &mut self.helide {
+                    let path = helix_loader::runtime_file(std::path::Path::new("tutor"));
+                    if let Err(e) = helide
+                        .editor
+                        .open(&path, helix_view::editor::Action::Replace)
+                    {
+                        helide
+                            .editor
+                            .set_error(format!("Failed to open tutor: {e}"));
+                    } else {
+                        helix_view::doc_mut!(helide.editor).set_path(None);
+                    }
+                    helide.render();
                 }
             }
             UserEvent::CloseBuffer => {
