@@ -209,9 +209,11 @@ impl ApplicationHandler for WinitApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Poll async editor events before rendering
+                // Poll async editor events (LSP, jobs, saves) before rendering
                 helide.poll_editor_events();
-                helide.render();
+                if !helide.editor.should_close() {
+                    helide.render();
+                }
             }
             _ => {}
         }

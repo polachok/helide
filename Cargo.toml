@@ -16,6 +16,7 @@ helix-core = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
 helix-lsp = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
 helix-loader = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
 helix-event = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-stdx = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
 
 winit = "0.30"
 wgpu = "24"
@@ -26,6 +27,7 @@ futures-util = { version = "0.3", features = ["std", "async-await"], default-fea
 arc-swap = "1.8"
 log = "0.4"
 anyhow = "1"
+serde_json = "1"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 dirs = "6"
