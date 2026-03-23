@@ -6,7 +6,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, ClassBuilder};
 use objc2::{define_class, msg_send, sel, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel,
+    NSApplication, NSDocumentController, NSEventModifierFlags, NSMenu, NSMenuItem,
+    NSModalResponseOK, NSOpenPanel,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSArray, NSDictionary, NSObject, NSProcessInfo, NSString,
@@ -45,6 +46,63 @@ pub fn flush_pending_files() {
             let _ = proxy.send_event(UserEvent::OpenFile(path));
         }
     }
+}
+
+/// Note a file as recently opened (shows in File > Open Recent).
+/// Note a file as recently opened and refresh the Open Recent menu.
+pub fn note_recent_document(path: &std::path::Path) {
+    use objc2_foundation::NSURL;
+    let mtm = MainThreadMarker::new().unwrap();
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
+    refresh_recent_menu(mtm);
+}
+
+fn refresh_recent_menu(mtm: MainThreadMarker) {
+    RECENT_MENU.with(|cell| {
+        let borrow = cell.borrow();
+        let Some(menu) = borrow.as_ref() else { return };
+
+        menu.removeAllItems();
+
+        let doc_controller = NSDocumentController::sharedDocumentController(mtm);
+        let urls = doc_controller.recentDocumentURLs();
+
+        for url in urls.iter() {
+            unsafe {
+                let Some(path) = url.path() else { continue };
+                let item = NSMenuItem::new(mtm);
+                // Show just the filename
+                if let Some(last) = url.lastPathComponent() {
+                    item.setTitle(&last);
+                } else {
+                    item.setTitle(&path);
+                }
+                item.setRepresentedObject(Some(&url));
+                item.setAction(Some(sel!(openRecentFile:)));
+                // Target the menu handler
+                MENU_HANDLER.with(|h| {
+                    if let Some(handler) = h.borrow().as_ref() {
+                        item.setTarget(Some(handler));
+                    }
+                });
+                menu.addItem(&item);
+            }
+        }
+
+        if !urls.is_empty() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+
+        let clear = NSMenuItem::new(mtm);
+        clear.setTitle(ns_string!("Clear Menu"));
+        unsafe {
+            clear.setAction(Some(sel!(clearRecentDocuments:)));
+            let doc_controller = NSDocumentController::sharedDocumentController(mtm);
+            clear.setTarget(Some(&doc_controller));
+        }
+        menu.addItem(&clear);
+    });
 }
 
 fn send_event(event: UserEvent) {
@@ -141,6 +199,20 @@ define_class!(
         fn tutor(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Tutor);
         }
+
+        #[unsafe(method(openRecentFile:))]
+        fn open_recent_file(&self, sender: &NSMenuItem) {
+            unsafe {
+                use objc2_foundation::NSURL;
+                if let Some(obj) = sender.representedObject() {
+                    // representedObject is the NSURL
+                    let url: &NSURL = &*(Retained::as_ptr(&obj) as *const NSURL);
+                    if let Some(path) = url.path() {
+                        send_event(UserEvent::OpenFile(PathBuf::from(path.to_string())));
+                    }
+                }
+            }
+        }
     }
 );
 
@@ -152,6 +224,7 @@ impl MenuHandler {
 
 thread_local! {
     static MENU_HANDLER: RefCell<Option<Retained<MenuHandler>>> = const { RefCell::new(None) };
+    static RECENT_MENU: RefCell<Option<Retained<NSMenu>>> = const { RefCell::new(None) };
 }
 
 /// Set up the native macOS menu bar.
@@ -270,6 +343,21 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     open.setAction(Some(sel!(openFile:)));
     open.setTarget(Some(handler));
     menu.addItem(&open);
+
+    // Open Recent submenu
+    let recent_menu = NSMenu::new(mtm);
+    recent_menu.setTitle(ns_string!("Open Recent"));
+    let recent_item = NSMenuItem::new(mtm);
+    recent_item.setTitle(ns_string!("Open Recent"));
+    recent_item.setSubmenu(Some(&recent_menu));
+    menu.addItem(&recent_item);
+
+    RECENT_MENU.with(|cell| {
+        *cell.borrow_mut() = Some(recent_menu);
+    });
+
+    // Populate from existing recent documents
+    refresh_recent_menu(mtm);
 
     let open_dir = NSMenuItem::new(mtm);
     open_dir.setTitle(ns_string!("Open Directory..."));

@@ -245,6 +245,9 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         .open(&path, helix_view::editor::Action::VerticalSplit)
                     {
                         helide.editor.set_error(format!("Failed to open: {e}"));
+                    } else {
+                        #[cfg(target_os = "macos")]
+                        platform::macos::note_recent_document(&path);
                     }
                     helide.render();
                 }
