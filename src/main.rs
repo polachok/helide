@@ -139,7 +139,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         let queue = Arc::new(queue);
 
         let scale_factor = window.scale_factor() as f32;
-        let renderer = Renderer::new(device, queue, surface, config, 16.0 * scale_factor);
+        let renderer = Renderer::new(device, queue, surface, config, 14.0 * scale_factor);
         let gpu_backend = GpuBackend::new(renderer);
 
         // Load helix config
