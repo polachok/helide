@@ -3,6 +3,7 @@ mod backend;
 mod input;
 mod renderer;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -23,15 +24,17 @@ struct WinitApp {
     helide: Option<HelideApp>,
     cursor_position: (f64, f64),
     modifiers: winit::event::Modifiers,
+    files: Vec<PathBuf>,
 }
 
 impl WinitApp {
-    fn new() -> Self {
+    fn new(files: Vec<PathBuf>) -> Self {
         WinitApp {
             window: None,
             helide: None,
             cursor_position: (0.0, 0.0),
             modifiers: winit::event::Modifiers::default(),
+            files,
         }
     }
 
@@ -118,7 +121,9 @@ impl ApplicationHandler for WinitApp {
         // Load helix config
         let editor_config = Config::load_default().unwrap_or_default();
 
-        let helide = HelideApp::new(gpu_backend, editor_config).expect("failed to init helide");
+        let files = std::mem::take(&mut self.files);
+        let helide =
+            HelideApp::new(gpu_backend, editor_config, files).expect("failed to init helide");
 
         self.helide = Some(helide);
         self.window = Some(window);
@@ -196,6 +201,13 @@ impl ApplicationHandler for WinitApp {
                 };
                 helide.handle_event(event);
             }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                // Window size will change via a subsequent Resized event
+                // Just request a redraw
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
                 // Poll async editor events before rendering
                 helide.poll_editor_events();
@@ -211,11 +223,42 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let _guard = runtime.enter();
 
+    // Set HELIX_RUNTIME if not already set.
+    // Search order: helix/runtime in cwd (dev), ~/.config/helix/runtime, next to `hx` binary
+    if std::env::var("HELIX_RUNTIME").is_err() {
+        let candidates: Vec<PathBuf> = [
+            // Development: helix clone in cwd
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.join("helix/runtime")),
+            // User config dir (where `hx` looks too)
+            dirs::config_dir().map(|d| d.join("helix/runtime")),
+            // Next to the installed `hx` binary (follows symlinks)
+            which::which("hx")
+                .ok()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .and_then(|p| p.parent().map(|d| d.join("runtime"))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        for candidate in candidates {
+            if candidate.join("themes").exists() && candidate.join("queries").exists() {
+                std::env::set_var("HELIX_RUNTIME", &candidate);
+                break;
+            }
+        }
+    }
+
     // Initialize helix runtime paths
     helix_loader::initialize_config_file(None);
     helix_loader::initialize_log_file(None);
 
+    // Parse CLI args: helide [files...]
+    let files: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+
     let event_loop = EventLoop::new().unwrap();
-    let mut app = WinitApp::new();
+    let mut app = WinitApp::new(files);
     event_loop.run_app(&mut app).unwrap();
 }

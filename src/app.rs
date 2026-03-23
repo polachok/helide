@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -28,7 +29,7 @@ pub struct HelideApp {
 }
 
 impl HelideApp {
-    pub fn new(backend: GpuBackend, config: Config) -> anyhow::Result<Self> {
+    pub fn new(backend: GpuBackend, config: Config, files: Vec<PathBuf>) -> anyhow::Result<Self> {
         // Register helix-term events (required before creating handlers)
         helix_term::events::register();
 
@@ -89,8 +90,20 @@ impl HelideApp {
 
         let jobs = Jobs::new();
 
-        // Open a scratch buffer
-        editor.new_file(helix_view::editor::Action::VerticalSplit);
+        // Open files or scratch buffer
+        if files.is_empty() {
+            editor.new_file(helix_view::editor::Action::VerticalSplit);
+        } else {
+            let action = helix_view::editor::Action::VerticalSplit;
+            for file in &files {
+                if let Err(e) = editor.open(file, action) {
+                    log::error!("Failed to open {}: {}", file.display(), e);
+                }
+            }
+            if editor.documents().next().is_none() {
+                editor.new_file(action);
+            }
+        }
 
         Ok(HelideApp {
             compositor,

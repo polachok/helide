@@ -7,7 +7,7 @@ use crossfont::{
 use wgpu::util::DeviceExt;
 
 use helix_tui::buffer::Cell;
-use helix_view::graphics::{Color, CursorKind, Modifier};
+use helix_view::graphics::{Color, CursorKind, Modifier, UnderlineStyle};
 
 /// ANSI 256-color palette (first 16 colors — standard terminal colors).
 /// Extended 216-color cube + 24 grayscale are computed algorithmically.
@@ -614,6 +614,7 @@ impl Renderer {
 
         let mut bg_instances: Vec<BgInstance> = Vec::with_capacity((cols * rows) as usize);
         let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
+        let mut decoration_instances: Vec<BgInstance> = Vec::new();
 
         for row in 0..rows {
             for col in 0..cols {
@@ -672,6 +673,89 @@ impl Renderer {
                             color: fg,
                         });
                     }
+                }
+
+                // Underline decorations
+                let underline_style = cell.underline_style;
+                if underline_style != UnderlineStyle::Reset {
+                    let underline_color = if cell.underline_color != Color::Reset {
+                        color_to_rgba(cell.underline_color, fg)
+                    } else {
+                        fg
+                    };
+                    let baseline_y = py + self.atlas.ascent;
+                    let underline_thickness = (self.cell_height / 14.0).max(1.0);
+
+                    match underline_style {
+                        UnderlineStyle::Line => {
+                            decoration_instances.push(BgInstance {
+                                pos: [px, baseline_y + 1.0],
+                                size: [self.cell_width, underline_thickness],
+                                color: underline_color,
+                            });
+                        }
+                        UnderlineStyle::DoubleLine => {
+                            let gap = underline_thickness + 1.0;
+                            decoration_instances.push(BgInstance {
+                                pos: [px, baseline_y + 1.0],
+                                size: [self.cell_width, underline_thickness],
+                                color: underline_color,
+                            });
+                            decoration_instances.push(BgInstance {
+                                pos: [px, baseline_y + 1.0 + gap],
+                                size: [self.cell_width, underline_thickness],
+                                color: underline_color,
+                            });
+                        }
+                        UnderlineStyle::Curl => {
+                            // Approximate curl with thicker underline
+                            decoration_instances.push(BgInstance {
+                                pos: [px, baseline_y + 1.0],
+                                size: [self.cell_width, underline_thickness * 2.0],
+                                color: underline_color,
+                            });
+                        }
+                        UnderlineStyle::Dotted => {
+                            // Dotted: draw alternating segments
+                            let dot_w = (self.cell_width / 4.0).max(2.0);
+                            let mut dx = px;
+                            while dx < px + self.cell_width {
+                                decoration_instances.push(BgInstance {
+                                    pos: [dx, baseline_y + 1.0],
+                                    size: [dot_w * 0.5, underline_thickness],
+                                    color: underline_color,
+                                });
+                                dx += dot_w;
+                            }
+                        }
+                        UnderlineStyle::Dashed => {
+                            // Dashed: longer segments
+                            let dash_w = (self.cell_width / 2.0).max(3.0);
+                            let gap_w = (self.cell_width / 4.0).max(2.0);
+                            let mut dx = px;
+                            while dx < px + self.cell_width {
+                                let w = dash_w.min(px + self.cell_width - dx);
+                                decoration_instances.push(BgInstance {
+                                    pos: [dx, baseline_y + 1.0],
+                                    size: [w, underline_thickness],
+                                    color: underline_color,
+                                });
+                                dx += dash_w + gap_w;
+                            }
+                        }
+                        UnderlineStyle::Reset => {}
+                    }
+                }
+
+                // Strikethrough
+                if modifier.contains(Modifier::CROSSED_OUT) {
+                    let strike_y = py + self.cell_height * 0.45;
+                    let strike_thickness = (self.cell_height / 14.0).max(1.0);
+                    decoration_instances.push(BgInstance {
+                        pos: [px, strike_y],
+                        size: [self.cell_width, strike_thickness],
+                        color: fg,
+                    });
                 }
 
                 // Cursor
@@ -753,6 +837,21 @@ impl Renderer {
                 pass.set_bind_group(1, &self.atlas_bind_group, &[]);
                 pass.set_vertex_buffer(0, glyph_buffer.slice(..));
                 pass.draw(0..4, 0..glyph_instances.len() as u32);
+            }
+
+            // Draw decorations (underlines, strikethrough, cursor overlay)
+            if !decoration_instances.is_empty() {
+                let decoration_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("decoration_instances"),
+                            contents: bytemuck::cast_slice(&decoration_instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                pass.set_pipeline(&self.bg_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, decoration_buffer.slice(..));
+                pass.draw(0..4, 0..decoration_instances.len() as u32);
             }
         }
 

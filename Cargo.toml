@@ -28,3 +28,5 @@ log = "0.4"
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
+dirs = "6"
+which = "7"
