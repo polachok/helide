@@ -1,0 +1,118 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-13
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Fetch and build tree-sitter grammars
+        run: |
+          cd helix
+          cargo run -- --grammar fetch
+          cargo run -- --grammar build
+
+      - name: Create app bundle
+        run: |
+          RELEASE_DIR="target/${{ matrix.target }}/release"
+          APP_DIR="${RELEASE_DIR}/bundle/osx/Helide.app"
+          RESOURCES="${APP_DIR}/Contents/Resources"
+          MACOS="${APP_DIR}/Contents/MacOS"
+
+          mkdir -p "${MACOS}" "${RESOURCES}"
+          cp extra/osx/Helide.app/Contents/Info.plist "${APP_DIR}/Contents/"
+          cp "${RELEASE_DIR}/helide" "${MACOS}/Helide"
+
+          # Icon
+          if [ -f extra/osx/Helide.app/Contents/Resources/Helide.icns ]; then
+            cp extra/osx/Helide.app/Contents/Resources/Helide.icns "${RESOURCES}/"
+          fi
+
+          # Bundle helix runtime
+          mkdir -p "${RESOURCES}/runtime"
+          cp -R helix/runtime/themes "${RESOURCES}/runtime/"
+          cp -R helix/runtime/queries "${RESOURCES}/runtime/"
+          [ -f helix/runtime/tutor ] && cp helix/runtime/tutor "${RESOURCES}/runtime/"
+
+          # Compiled grammars
+          mkdir -p "${RESOURCES}/runtime/grammars"
+          find helix/runtime/grammars -maxdepth 1 \( -name "*.so" -o -name "*.dylib" \) \
+            -exec cp {} "${RESOURCES}/runtime/grammars/" \;
+
+          # Language config
+          [ -f helix/languages.toml ] && cp helix/languages.toml "${RESOURCES}/runtime/"
+
+      - name: Create DMG
+        run: |
+          RELEASE_DIR="target/${{ matrix.target }}/release"
+          APP_DIR="${RELEASE_DIR}/bundle/osx"
+          DMG_NAME="Helide-${{ matrix.target }}.dmg"
+
+          hdiutil create -volname "Helide" \
+            -srcfolder "${APP_DIR}/Helide.app" \
+            -ov -format UDZO "${APP_DIR}/${DMG_NAME}"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Helide-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/bundle/osx/Helide-*.dmg
+
+  # Create universal binary on tag push
+  universal:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Helide-aarch64-apple-darwin/Helide-aarch64-apple-darwin.dmg
+            Helide-x86_64-apple-darwin/Helide-x86_64-apple-darwin.dmg
+          draft: true
