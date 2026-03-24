@@ -6,135 +6,167 @@ A native GUI frontend for Helix editor, rendering directly to a winit window via
 
 ## Current Status
 
-All core phases are implemented and working:
+Fully functional GPU-rendered Helix editor with native macOS integration:
 
-- **GPU-accelerated rendering** via wgpu + crossfont glyph atlas
+- **GPU-accelerated rendering** via wgpu + crossfont glyph atlas (3-pass instanced)
 - **Full Helix editor** with compositor, keymaps, syntax highlighting, themes
 - **Keyboard and mouse input** mapped from winit to helix events
-- **Decoration rendering** (underlines, strikethrough, cursor)
-- **File opening** from CLI args
-- **Runtime auto-discovery** (dev checkout, ~/.config/helix, next to hx binary)
-- **Clean shutdown** without macOS crash dialog
+- **LSP integration** — diagnostics, progress, spinners, language server messages
+- **Native macOS app** — menu bar, transparent titlebar, Open With, Open Recent, drag-and-drop
+- **macOS .app bundle + DMG packaging** with bundled helix runtime
 
-## Architecture (Implemented)
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  helix-core / helix-view / helix-lsp / helix-dap    │  ← git dep, pinned rev
+│  helix-core / helix-view / helix-lsp / helix-dap    │  ← git submodule, pinned rev
 ├─────────────────────────────────────────────────────┤
 │  helix-tui  (Buffer, Cell, Terminal<B>, Backend)     │  ← reused, GpuBackend impl
 ├─────────────────────────────────────────────────────┤
 │  helix-term (Compositor, Component, EditorView, UI)  │  ← reused for all UI
 ├─────────────────────────────────────────────────────┤
 │  helide (binary crate)                               │
-│  ├── backend.rs   — GpuBackend (impl Backend)        │
-│  ├── renderer.rs  — wgpu + crossfont + glyph atlas   │
-│  ├── input.rs     — winit KeyEvent → helix Event     │
-│  ├── app.rs       — HelideApp (Editor+Compositor)    │
-│  └── main.rs      — winit event loop, wgpu init      │
-│  └── shaders/     — bg.wgsl, glyph.wgsl              │
+│  ├── backend.rs        — GpuBackend (impl Backend)   │
+│  ├── renderer.rs       — wgpu + crossfont + atlas    │
+│  ├── input.rs          — winit → helix events        │
+│  ├── app.rs            — HelideApp + LSP handling     │
+│  ├── config.rs         — font config (~/.config/helide) │
+│  ├── main.rs           — winit event loop, wgpu init  │
+│  ├── platform/macos.rs — native menus, open-with, etc │
+│  └── shaders/          — bg.wgsl, glyph.wgsl         │
 └─────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
 
-**Event loop**: winit owns the main thread via `run_app()`. Tokio runtime is entered on the main thread (`runtime.enter()`) so `tokio::spawn` works for helix async handlers. No separate thread needed — all rendering and input handling is synchronous in winit callbacks.
+**Event loop**: winit owns the main thread via `run_app()`. Tokio runtime entered on main thread so `tokio::spawn` works. Periodic 100ms redraw timer via `EventLoopProxy` for LSP updates.
 
-**Handlers**: helix-term's `handlers` module is private. We construct `Handlers` manually with dummy tokio channels for LSP features (completions, signature help, etc.) and a real `word_index::Handler`. Basic editing works fully; LSP features require wiring up the actual handler tasks.
+**LSP handling**: Async via `tokio::select!` with 5ms timeout. Polls LSP incoming, job callbacks, save queue, and status messages. Full `handle_language_server_message` ported from helix-term (diagnostics, progress, workspace edits, config, capabilities).
+
+**Handlers**: Constructed manually with dummy tokio channels for LSP features and real `word_index::Handler`. Basic editing + LSP diagnostics work; completion/signature help handlers not spawned.
 
 **Rendering**: 3-pass instanced rendering per frame:
 1. Background quads (one draw call for all cells)
-2. Glyph quads sampling texture atlas (one draw call)
+2. Glyph quads sampling texture atlas (one draw call, gamma-corrected alpha)
 3. Decoration quads — underlines, strikethrough, cursor (one draw call)
 
-**Colors**: Non-sRGB surface format to avoid double gamma. Theme default fg/bg extracted from `ui.background` and `ui.text` scopes. Full ANSI 256-color palette + RGB support.
+**Colors**: Non-sRGB surface format, colors passed as sRGB. Theme default fg/bg extracted from `ui.background` and `ui.text` scopes. Auto-updates on theme change.
 
-**Font**: crossfont with regular/bold/italic/bold-italic variants. Nearest-neighbor atlas sampling for crisp glyphs. Font size scaled by window DPI factor.
+**Font**: crossfont with regular/bold/italic/bold-italic variants. Nearest-neighbor atlas sampling. Font size scaled by DPI. Glyph alpha gamma correction (pow 1.4) to match terminal emulator weight. RGB sub-pixel AA averaged to grayscale. Cell width ceiled for proper centering.
+
+**macOS integration**: objc2 0.6 for native APIs. Delegate subclassing for `application:openFiles:`. `NSDocumentController` for Open Recent. Transparent titlebar with auto light/dark appearance based on theme luminance.
 
 ## Source Files
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/main.rs` | ~230 | winit event loop, wgpu init, runtime discovery, CLI args |
-| `src/app.rs` | ~230 | HelideApp: Editor + Compositor + Terminal init, event handling, render loop |
-| `src/renderer.rs` | ~760 | wgpu pipelines, glyph atlas, cell-to-GPU rendering, color mapping |
-| `src/backend.rs` | ~120 | GpuBackend implementing helix-tui Backend trait |
-| `src/input.rs` | ~170 | winit → helix event conversion (keys, mouse, scroll) |
-| `src/shaders/bg.wgsl` | ~40 | Background quad vertex/fragment shader |
-| `src/shaders/glyph.wgsl` | ~50 | Glyph quad vertex/fragment shader (atlas sampling) |
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | winit event loop, wgpu init, runtime discovery, CLI args, macOS setup |
+| `src/app.rs` | HelideApp: Editor + Compositor + Terminal init, event/render loop, LSP handler |
+| `src/renderer.rs` | wgpu pipelines, glyph atlas, cell-to-GPU rendering, color mapping, decorations |
+| `src/backend.rs` | GpuBackend implementing helix-tui Backend trait |
+| `src/input.rs` | winit → helix event conversion (keys, mouse, scroll accumulator) |
+| `src/config.rs` | Font config from ~/.config/helide/config.toml |
+| `src/platform/macos.rs` | Native menu bar, NSOpenPanel, Open Recent, file open handler, appearance |
+| `src/shaders/bg.wgsl` | Background quad vertex/fragment shader |
+| `src/shaders/glyph.wgsl` | Glyph quad shader with gamma-corrected alpha |
+| `extra/osx/` | macOS .app template (Info.plist, icon) |
+| `macos-builder/run` | Build script: compiles, fetches/builds grammars, creates .app + .dmg |
 
 ## Dependencies
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| helix-* | git rev 3d68e0a | Editor core, TUI, view, LSP, etc. |
+| helix-* | git rev 3d68e0a | Editor core, TUI, view, LSP, etc. (submodule) |
 | winit | 0.30 | Window creation, event loop |
 | wgpu | 24 | GPU rendering (Metal/Vulkan/DX12) |
 | crossfont | 0.9 | Font rasterization (CoreText/FreeType/DirectWrite) |
 | tokio | 1 | Async runtime for helix machinery |
+| objc2 | 0.6 | macOS native APIs (menus, file handling) |
+| arboard | 3 | System clipboard |
 | bytemuck | 1 | GPU buffer casting |
-| pollster | 0.4 | Block on async (wgpu init) |
-| dirs | 6 | Platform config directory |
-| which | 7 | Find hx binary for runtime discovery |
+| content_inspector | 0.2 | Text file detection for drag-and-drop |
 
 ## What Works
 
+### Editor
 - Normal mode, insert mode, command mode
 - All helix keybindings and commands
 - Syntax highlighting (tree-sitter via helix runtime)
-- Theme support (loads user's configured theme)
+- Theme support with live switching (`:theme`)
 - File picker, fuzzy finder, command palette
-- Mouse clicks, scroll, selection
+- Mouse clicks, scroll (accumulator-gated), selection
 - Window resize with cell grid recalculation
 - Multiple buffers and splits
 - Line numbers, status line, mode indicator
 - Bold, italic, dim, reversed, hidden text modifiers
 - Underline styles: line, double, curl, dotted, dashed
-- Strikethrough
-- Cursor rendering (block, bar, underline)
+- Strikethrough, cursor rendering (block, bar, underline)
+
+### LSP
+- Diagnostics (publishDiagnostics)
+- Progress messages and spinner animation
+- Language server lifecycle (init, exit, capabilities)
+- Workspace edits, configuration, file watchers
+- Document save with file size display
+
+### macOS Native
+- Menu bar: Helide, File, Edit, Window, Help
+- File > New, Open (NSOpenPanel), Open Recent, Open Directory, Save, Close
+- Edit > Undo, Redo, Paste (via arboard)
+- Help > Helix Tutor
+- Window > Minimize, Zoom, Full Screen
+- Transparent titlebar matching editor background
+- Auto light/dark titlebar based on theme luminance
+- "Open With" from Finder (application:openFiles: delegate)
+- Drag-and-drop files onto window and dock icon
+- Close button hides window (macOS behavior), dock icon reopens
+- Graceful shutdown: flush writes, close LSP servers
+
+### Packaging
+- macOS .app bundle with bundled helix runtime (themes, queries, grammars, tutor)
+- DMG creation (hdiutil or create-dmg)
+- App icon
+- `INSTALL=true` option for /Applications + LaunchServices registration
+- helix as git submodule with grammar fetch/build
+
+## Config
+
+`~/.config/helide/config.toml`:
+```toml
+[font]
+family = "JetBrainsMono Nerd Font Mono"
+size = 14.0
+```
+
+## Building
+
+```sh
+# Development
+cargo run -- file.rs
+
+# Release + install
+INSTALL=true ./macos-builder/run
+
+# Release + DMG
+GENERATE_DMG=true ./macos-builder/run
+```
 
 ## Known Limitations / TODO
 
 ### High Priority
-- **LSP not wired up** — Handlers use dummy channels. Need to spawn actual CompletionHandler, SignatureHelpHandler, AutoSaveHandler, etc. from helix-term (requires making `handlers` module public or reimplementing)
-- **No async event polling loop** — editor events (LSP responses, jobs) only polled on RedrawRequested, not continuously. Need a timer or EventLoopProxy-based wakeup
-- **IME input not handled** — winit `Ime` events are ignored, breaks CJK/compose input
+- **Completion/signature help** — LSP handlers use dummy channels. Need to spawn actual handlers (requires making helix-term `handlers` module public or reimplementing)
+- **IME input** — winit `Ime` events not handled, breaks CJK/compose input
 
 ### Medium Priority
-- **No clipboard integration** — helix-view has clipboard support but may need platform adaptation
 - **Wide characters (CJK)** — cell grid handles 2-cell-wide chars but renderer doesn't skip the second cell
 - **Cursor blinking** — no animation, cursor is always solid
-- **OS dark/light mode** — `get_theme_mode()` returns None, could use winit theme detection
-- **Font configuration** — hardcoded to "monospace" at 16pt, should read from config
+- **Font smoothing** — gamma correction in shader approximates correct weight; proper fix needs per-CGContext control (like ghostty)
 
 ### Nice to Have
-- Smooth scrolling (interpolate between frames)
+- Smooth scrolling (needs separate viewport texture, not just cell offset)
 - Cursor movement animation (Neovide-style)
 - Ligature support (needs text shaping via harfbuzz or cosmic-text)
 - GPU-accelerated curly underlines (currently approximated as thick line)
-- Window transparency
+- Window transparency / vibrancy
 - Multi-window support
-- Custom title bar
-
-## Completed Implementation Phases
-
-### Phase 0: Crate Skeleton [done]
-Created helide crate with git dependencies on helix crates at pinned commit. Verified Backend trait is implementable from outside.
-
-### Phase 1: GpuBackend + Static Render [done]
-Implemented Backend trait with winit + wgpu. Built crossfont glyph atlas with texture upload. Wrote WGSL shaders for instanced background and glyph quads. Proved rendering with a demo buffer.
-
-### Phase 2: Wire Up Editor [done]
-HelideApp struct owns Editor, Compositor, Terminal<GpuBackend>. Constructs Handlers manually (dummy LSP channels + real word_index). Loads theme and extracts default colors. Compositor renders to buffer, terminal diffs, backend flushes to GPU.
-
-### Phase 3: Event Loop + Input [done]
-winit ApplicationHandler with tokio runtime on main thread. Key/mouse/scroll events converted from winit to helix Event types. Focus, resize, close handled. Clean shutdown drops wgpu resources before winit exits.
-
-### Phase 4: Input Mapping [done]
-~30 key codes mapped (arrows, F-keys, modifiers, special keys). Mouse press/release/scroll with cell coordinate conversion. Shift modifier stripped for already-capitalized characters.
-
-### Phase 5: Decoration Rendering [done]
-Third render pass for underlines (line, double, curl, dotted, dashed), strikethrough, and cursor overlay. Underline color from cell or fg fallback. Reuses bg pipeline (colored rects).
-
-### Phase 6: Polish [done]
-CLI file opening (`helide file.rs`). Runtime auto-discovery: checks ./helix/runtime, ~/.config/helix/runtime, next to `hx` binary. DPI-aware font sizing. Non-sRGB surface for correct colors. Theme-aware default colors.
+- Configurable gamma correction for font weight
