@@ -16,6 +16,12 @@ use helix_view::Editor;
 
 use crate::backend::GpuBackend;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Editor,
+    Terminal,
+}
+
 pub struct HelideApp {
     pub compositor: Compositor,
     pub terminal: Terminal<GpuBackend>,
@@ -24,10 +30,14 @@ pub struct HelideApp {
     pub jobs: Jobs,
     pub lsp_progress: LspProgressMap,
     last_theme_name: String,
+    pub layout: crate::layout::Layout,
+    pub terminal_pane: Option<crate::terminal::TerminalPane>,
+    pub focus: Focus,
+    pub event_proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
 }
 
 impl HelideApp {
-    pub fn new(backend: GpuBackend, config: Config, files: Vec<PathBuf>) -> anyhow::Result<Self> {
+    pub fn new(backend: GpuBackend, config: Config, files: Vec<PathBuf>, event_proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>) -> anyhow::Result<Self> {
         let area = backend.size()?;
         let mut terminal = Terminal::new(backend)?;
 
@@ -101,6 +111,12 @@ impl HelideApp {
 
         let last_theme_name = editor.theme.name().to_string();
 
+        let layout = crate::layout::Layout::new(
+            terminal.backend().renderer().config.width,
+            terminal.backend().renderer().config.height,
+            terminal.backend().renderer().padding_top,
+        );
+
         Ok(HelideApp {
             compositor,
             terminal,
@@ -109,6 +125,10 @@ impl HelideApp {
             jobs,
             lsp_progress: LspProgressMap::new(),
             last_theme_name,
+            layout,
+            terminal_pane: None,
+            focus: Focus::Editor,
+            event_proxy,
         })
     }
 
@@ -145,6 +165,47 @@ impl HelideApp {
         self.render();
     }
 
+    /// Toggle the terminal pane on/off.
+    pub fn toggle_terminal(&mut self) {
+        let now_visible = self.layout.toggle_terminal();
+
+        if now_visible && self.terminal_pane.is_none() {
+            let regions = self.layout.regions();
+            if let Some((_, _, tw, th)) = regions.terminal {
+                let renderer = self.terminal.backend().renderer();
+                match crate::terminal::TerminalPane::new(renderer, tw, th, self.event_proxy.clone()) {
+                    Ok(pane) => self.terminal_pane = Some(pane),
+                    Err(e) => {
+                        log::error!("Failed to create terminal pane: {e}");
+                        self.layout.toggle_terminal(); // revert
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Resize editor to new region dimensions
+        let regions = self.layout.regions();
+        let (_, _, ew, eh) = regions.editor;
+        self.terminal.backend_mut().handle_resize(ew, eh);
+        let backend_size = self.terminal.backend().size().unwrap();
+        self.handle_resize(backend_size.width, backend_size.height);
+
+        // Resize terminal pane if visible
+        if let (Some(pane), Some((_, _, tw, th))) = (&mut self.terminal_pane, regions.terminal) {
+            pane.resize(self.terminal.backend().renderer(), tw, th);
+        }
+
+        // Switch focus
+        if now_visible {
+            self.focus = Focus::Terminal;
+        } else {
+            self.focus = Focus::Editor;
+        }
+
+        self.render();
+    }
+
     /// Render the editor state to the GPU.
     pub fn render(&mut self) {
         // Update renderer colors if theme changed
@@ -153,6 +214,10 @@ impl HelideApp {
             self.last_theme_name = theme_name.to_string();
             update_renderer_theme(&self.editor.theme, self.terminal.backend_mut());
         }
+
+        // Set editor text dim based on focus
+        let editor_dim = if self.focus == Focus::Editor || !self.layout.terminal_visible { 1.0 } else { 0.8 };
+        self.terminal.backend_mut().renderer_mut().fg_dim = editor_dim;
 
         // GPU rendering is cheap — always do a full redraw
         let _ = self.terminal.clear();
@@ -176,8 +241,93 @@ impl HelideApp {
         let (pos, kind) = self.compositor.cursor(area, &self.editor);
         self.editor.cursor_cache.reset();
 
-        let pos = pos.map(|pos| (pos.col as u16, pos.row as u16));
+        // Hide editor cursor when terminal is focused
+        let (pos, kind) = if self.focus == Focus::Terminal {
+            (None, helix_view::graphics::CursorKind::Hidden)
+        } else {
+            (pos.map(|pos| (pos.col as u16, pos.row as u16)), kind)
+        };
+        // Set cursor state before draw so build_instances sees it
+        match kind {
+            helix_view::graphics::CursorKind::Hidden => {
+                let _ = self.terminal.backend_mut().hide_cursor();
+            }
+            k => {
+                if let Some((x, y)) = pos {
+                    let _ = self.terminal.backend_mut().set_cursor(x, y);
+                }
+                let _ = self.terminal.backend_mut().show_cursor(k);
+            }
+        }
         self.terminal.draw(pos, kind).unwrap();
+
+        // Render terminal pane if visible
+        if self.layout.terminal_visible {
+            if let Some(pane) = &mut self.terminal_pane {
+                pane.poll_events();
+                if pane.exited {
+                    self.terminal_pane = None;
+                    self.layout.toggle_terminal();
+                    self.focus = Focus::Editor;
+                    // Re-render editor at full size
+                    let regions = self.layout.regions();
+                    let (_, _, ew, eh) = regions.editor;
+                    self.terminal.backend_mut().handle_resize(ew, eh);
+                    self.terminal.backend_mut().renderer_mut().fg_dim = 1.0;
+                    let _ = self.terminal.clear();
+                    // Re-render editor — recursive call is fine since terminal is now gone
+                    self.render();
+                    return;
+                }
+                if pane.dirty {
+                    let term = pane.term.lock();
+                    let cell_width = pane.cell_width;
+                    let cell_height = pane.cell_height;
+                    let backend = self.terminal.backend_mut();
+                    let renderer = backend.renderer_mut();
+                    let default_fg = renderer.default_fg;
+                    let default_bg = renderer.default_bg;
+                    let is_focused = self.focus == Focus::Terminal;
+                    let (bg, glyph, deco) = crate::terminal::cells::build_terminal_instances(
+                        &term,
+                        &mut renderer.atlas,
+                        &renderer.queue,
+                        cell_width,
+                        cell_height,
+                        default_fg,
+                        default_bg,
+                        is_focused,
+                        if is_focused { 1.0 } else { 0.8 },
+                    );
+                    drop(term);
+
+                    let region_view = pane.region_view();
+                    let (region_width, region_height) = pane.region_size();
+                    renderer.render_instances_to_texture(
+                        &bg, &glyph, &deco,
+                        region_view,
+                        region_width,
+                        region_height,
+                    );
+                    pane.dirty = false;
+                }
+            }
+        }
+
+        // Composite all regions to swapchain, dim inactive pane
+        let regions_info = self.layout.regions();
+        let backend = self.terminal.backend();
+
+        if let (Some(pane), Some(term_rect)) = (&self.terminal_pane, regions_info.terminal) {
+            let regions = [
+                (backend.region_view(), regions_info.editor),
+                (pane.region_view(), term_rect),
+            ];
+            backend.renderer().composite(&regions);
+        } else {
+            let regions = [(backend.region_view(), regions_info.editor)];
+            backend.renderer().composite(&regions);
+        }
     }
 
     /// Returns the title string based on the focused document.

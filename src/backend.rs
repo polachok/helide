@@ -14,6 +14,12 @@ pub struct GpuBackend {
     rows: u16,
     cursor_pos: Option<(u16, u16)>,
     cursor_kind: CursorKind,
+    // Offscreen texture for editor region
+    region_texture: wgpu::Texture,
+    region_view: wgpu::TextureView,
+    region_width: u32,
+    region_height: u32,
+    dirty: bool,
 }
 
 impl GpuBackend {
@@ -23,6 +29,10 @@ impl GpuBackend {
         let rows = (usable_height / renderer.cell_height) as u16;
         let grid = vec![Cell::default(); (cols as usize) * (rows as usize)];
 
+        let width = renderer.config.width;
+        let height = renderer.config.height;
+        let (region_texture, region_view) = renderer.create_region_texture(width, height);
+
         GpuBackend {
             renderer,
             grid,
@@ -30,6 +40,11 @@ impl GpuBackend {
             rows,
             cursor_pos: None,
             cursor_kind: CursorKind::Hidden,
+            region_texture,
+            region_view,
+            region_width: width,
+            region_height: height,
+            dirty: true,
         }
     }
 
@@ -51,8 +66,9 @@ impl GpuBackend {
         self.renderer.set_padding_top(padding);
     }
 
+    /// Resize the editor region (texture + grid). Does NOT resize the swapchain surface.
+    /// Call `handle_window_resize()` for actual window resize.
     pub fn handle_resize(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
         let new_cols = (width as f32 / self.renderer.cell_width) as u16;
         let usable_height = height as f32 - self.renderer.padding_top;
         let new_rows = (usable_height / self.renderer.cell_height) as u16;
@@ -61,6 +77,36 @@ impl GpuBackend {
             self.rows = new_rows;
             self.grid = vec![Cell::default(); (new_cols as usize) * (new_rows as usize)];
         }
+        if width != self.region_width || height != self.region_height {
+            let (region_texture, region_view) =
+                self.renderer.create_region_texture(width, height);
+            self.region_texture = region_texture;
+            self.region_view = region_view;
+            self.region_width = width;
+            self.region_height = height;
+        }
+    }
+
+    /// Resize the swapchain surface to the full window size.
+    /// Call this only on actual window resize, not on region resize.
+    pub fn handle_window_resize(&mut self, width: u32, height: u32) {
+        self.renderer.resize(width, height);
+    }
+
+    pub fn region_view(&self) -> &wgpu::TextureView {
+        &self.region_view
+    }
+
+    pub fn region_rect(&self) -> (u32, u32, u32, u32) {
+        (0, 0, self.region_width, self.region_height)
+    }
+
+    pub fn renderer(&self) -> &Renderer {
+        &self.renderer
+    }
+
+    pub fn renderer_mut(&mut self) -> &mut Renderer {
+        &mut self.renderer
     }
 }
 
@@ -117,13 +163,17 @@ impl Backend for GpuBackend {
     }
 
     fn flush(&mut self) -> Result<(), io::Error> {
-        self.renderer.render_grid(
+        self.renderer.render_grid_to_texture(
             &self.grid,
             self.cols,
             self.rows,
             self.cursor_pos,
             self.cursor_kind,
+            &self.region_view,
+            self.region_width,
+            self.region_height,
         );
+        self.dirty = false;
         Ok(())
     }
 

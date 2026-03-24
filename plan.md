@@ -151,6 +151,102 @@ INSTALL=true ./macos-builder/run
 GENERATE_DMG=true ./macos-builder/run
 ```
 
+## Terminal Integration
+
+### Overview
+
+Embedded terminal emulator pane below the editor, using `alacritty_terminal` for VT parsing/PTY management and the existing wgpu renderer for display. The split is at the GUI level (not Helix's view tree).
+
+### Architecture
+
+```
+┌─────────────────────────────────┐
+│                                 │
+│         Editor (wgpu)           │
+│     (existing HelideApp)        │
+│                                 │
+├─────────────── ─ ─ ─ ──────────┤  ← draggable divider
+│                                 │
+│      Terminal (wgpu)            │
+│   (alacritty_terminal grid)     │
+│                                 │
+└─────────────────────────────────┘
+```
+
+- Top-level `Layout` struct owns split ratio, computes pixel rects for editor/divider/terminal regions
+- Terminal hidden by default, toggled via keybind (e.g. Ctrl+`)
+- When hidden, editor gets full window
+- Start with single terminal session, designed so tabs can be added later
+
+### Rendering
+
+Each region renders to its own offscreen texture, then a composite pass blits both to the swapchain:
+
+- Editor and terminal each have independent instance buffers (background, glyph, decoration)
+- Each region tracks a dirty flag — only rebuild instances when content changed
+- Composite pass: trivial shader sampling two textures
+- Shared glyph atlas — terminal uses same font, same atlas lookups
+- Enables future: per-region effects (dim unfocused pane, vibrancy), different frame rates, resize animations, tabs as additional textures
+
+### Terminal Component (TerminalPane)
+
+```
+TerminalPane
+├── alacritty_terminal::Term<EventListener>  — terminal state machine + grid
+├── alacritty_terminal::tty::Pty             — PTY handle (read/write)
+├── focused: bool
+├── scrollback_offset: usize
+└── size: (cols, rows)
+```
+
+**Lifecycle:**
+1. First toggle-open: spawn PTY with `$SHELL`, create `Term` with grid dimensions from pane size + cell metrics
+2. PTY output read on background tokio task, fed into `Term` for parsing
+3. Each frame: read `Term` grid cells → convert to renderer instances → draw with same 3-pass pipeline
+4. On resize (window or divider drag): notify `Term` of new size, send `SIGWINCH` to PTY
+5. On toggle-hide: PTY keeps running, just stop rendering
+6. On app exit: kill PTY child process
+
+### Input Routing
+
+Processing order:
+1. **Global keybinds** — toggle terminal (intercepted before any component sees it)
+2. **Divider drag** — mouse down/move/up on divider region
+3. **Route to focused component** — editor or terminal
+
+Focus model:
+- Click in editor region → editor focused
+- Click in terminal region → terminal focused
+- Toggle keybind switches focus along with visibility
+
+When terminal focused: keyboard encoded as escape sequences via alacritty_terminal, written to PTY. Mouse events forwarded if terminal app requests mouse reporting.
+
+### New Files
+
+```
+src/
+├── layout.rs          — Layout: split ratio, rects, divider drag state, toggle
+├── terminal/
+│   ├── mod.rs         — TerminalPane: PTY lifecycle, grid reading, dirty tracking
+│   ├── input.rs       — key/mouse → terminal escape sequence encoding
+│   └── cells.rs       — alacritty_terminal Cell → renderer instance conversion
+├── compositor.rs      — composites region textures to swapchain
+├── shaders/
+│   └── composite.wgsl — samples two textures, outputs to screen
+```
+
+### Modified Files
+
+- `renderer.rs` — render to offscreen texture instead of swapchain; accept region rect parameter
+- `app.rs` — owns Layout + TerminalPane, routes input, triggers per-region renders
+- `input.rs` — add global keybind interception before routing
+- `main.rs` — minor: pass through terminal config
+- `config.rs` — add terminal toggle keybind config
+
+### Dependencies
+
+- `alacritty_terminal` — VT parsing, PTY management, terminal grid state
+
 ## Known Limitations / TODO
 
 ### High Priority

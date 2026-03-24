@@ -5,6 +5,19 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct HelideConfig {
     pub font: FontConfig,
+    pub terminal: TerminalConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct TerminalConfig {
+    pub split_ratio: f32,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self { split_ratio: 0.7 }
+    }
 }
 
 #[derive(Debug, Deserialize)]

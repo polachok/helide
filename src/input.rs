@@ -1,7 +1,19 @@
 use helix_view::input::{Event, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use helix_view::keyboard::KeyCode;
 use winit::event::{ElementState, MouseScrollDelta};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, KeyCode as WinitKeyCode, NamedKey, PhysicalKey};
+
+/// Detect Ctrl+` (toggle terminal keybind).
+pub fn is_toggle_terminal(event: &winit::event::KeyEvent, modifiers: &winit::event::Modifiers) -> bool {
+    if event.state != ElementState::Pressed {
+        return false;
+    }
+    let ctrl = modifiers.state().control_key();
+    if !ctrl {
+        return false;
+    }
+    matches!(event.physical_key, PhysicalKey::Code(WinitKeyCode::Backquote))
+}
 
 /// Convert a winit key event to a helix key event.
 pub fn convert_key_event(

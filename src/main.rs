@@ -2,14 +2,16 @@ mod app;
 mod backend;
 mod config;
 mod input;
+mod layout;
 mod platform;
 mod renderer;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
@@ -184,7 +186,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
 
         let files = std::mem::take(&mut self.files);
         let helide =
-            HelideApp::new(gpu_backend, editor_config, files).expect("failed to init helide");
+            HelideApp::new(gpu_backend, editor_config, files, self.proxy.clone()).expect("failed to init helide");
 
         // Set up native macOS menu bar
         #[cfg(target_os = "macos")]
@@ -224,7 +226,14 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                 platform::macos::flush_pending_files();
 
                 if let Some(helide) = &mut self.helide {
-                    let needs_render = helide.poll_editor_events();
+                    let mut needs_render = helide.poll_editor_events();
+                    // Poll terminal events
+                    if let Some(pane) = &mut helide.terminal_pane {
+                        pane.poll_events();
+                        if pane.dirty {
+                            needs_render = true;
+                        }
+                    }
                     if needs_render && !helide.editor.should_close() {
                         helide.render();
                     }
@@ -368,43 +377,111 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                 self.shutdown(event_loop);
             }
             WindowEvent::Resized(size) => {
-                helide
-                    .terminal
-                    .backend_mut()
-                    .handle_resize(size.width, size.height);
+                // Resize swapchain surface to full window size first
+                helide.terminal.backend_mut().handle_window_resize(size.width, size.height);
+                // Then resize regions
+                helide.layout.set_window_size(size.width, size.height);
+                let regions = helide.layout.regions();
+                let (_, _, ew, eh) = regions.editor;
+                helide.terminal.backend_mut().handle_resize(ew, eh);
                 let backend_size = helide.terminal.backend().size().unwrap();
                 helide.handle_resize(backend_size.width, backend_size.height);
+                if let (Some(pane), Some((_, _, tw, th))) = (&mut helide.terminal_pane, regions.terminal) {
+                    pane.resize(helide.terminal.backend().renderer(), tw, th);
+                }
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods;
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let should_close = {
-                    if let Some(hx_event) = input::convert_key_event(&event, &self.modifiers) {
-                        helide.handle_event(hx_event);
-                        helide.editor.should_close()
-                    } else {
-                        false
+                // Global: toggle terminal
+                if input::is_toggle_terminal(&event, &self.modifiers) {
+                    helide.toggle_terminal();
+                    return;
+                }
+
+                match helide.focus {
+                    app::Focus::Editor => {
+                        let should_close = {
+                            if let Some(hx_event) = input::convert_key_event(&event, &self.modifiers) {
+                                helide.handle_event(hx_event);
+                                helide.editor.should_close()
+                            } else {
+                                false
+                            }
+                        };
+                        if should_close {
+                            self.shutdown(event_loop);
+                        }
                     }
-                };
-                if should_close {
-                    self.shutdown(event_loop);
+                    app::Focus::Terminal => {
+                        if let Some(pane) = &helide.terminal_pane {
+                            if let Some(bytes) = crate::terminal::input::encode_key(&event, &self.modifiers) {
+                                pane.write_to_pty(&bytes);
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                let cell_size = Self::cell_size(helide);
-                if let Some(hx_event) = input::convert_mouse_press(
-                    state,
-                    button,
-                    self.cursor_position,
-                    cell_size,
-                    &self.modifiers,
-                ) {
-                    helide.handle_event(hx_event);
+                let (cx, cy) = self.cursor_position;
+
+                // Divider drag
+                if state == ElementState::Pressed && button == winit::event::MouseButton::Left {
+                    if helide.layout.hit_test_divider(cx as f32, cy as f32) {
+                        helide.layout.drag_start(cy as f32);
+                        return;
+                    }
+                }
+                if state == ElementState::Released && helide.layout.is_dragging() {
+                    helide.layout.drag_end();
+                    helide.render();
+                    return;
+                }
+
+                // Focus + event routing
+                use crate::layout::RegionKind;
+                let new_focus = match helide.layout.region_at(cx as f32, cy as f32) {
+                    RegionKind::Editor => app::Focus::Editor,
+                    RegionKind::Terminal => app::Focus::Terminal,
+                    RegionKind::Divider => helide.focus,
+                };
+                let focus_changed = new_focus != helide.focus;
+                helide.focus = new_focus;
+
+                match new_focus {
+                    app::Focus::Editor => {
+                        let cell_size = Self::cell_size(helide);
+                        if let Some(hx_event) = input::convert_mouse_press(
+                            state, button, self.cursor_position, cell_size, &self.modifiers,
+                        ) {
+                            helide.handle_event(hx_event);
+                        }
+                    }
+                    app::Focus::Terminal => {}
+                }
+
+                if focus_changed {
+                    if let Some(pane) = &mut helide.terminal_pane {
+                        pane.dirty = true;
+                    }
+                    helide.render();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = (position.x, position.y);
+                if helide.layout.is_dragging() {
+                    if helide.layout.drag_update(position.y as f32) {
+                        let regions = helide.layout.regions();
+                        let (_, _, ew, eh) = regions.editor;
+                        helide.terminal.backend_mut().handle_resize(ew, eh);
+                        let backend_size = helide.terminal.backend().size().unwrap();
+                        helide.handle_resize(backend_size.width, backend_size.height);
+                        if let (Some(pane), Some((_, _, tw, th))) = (&mut helide.terminal_pane, regions.terminal) {
+                            pane.resize(helide.terminal.backend().renderer(), tw, th);
+                        }
+                    }
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let cell_size = Self::cell_size(helide);
@@ -460,6 +537,9 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             WindowEvent::RedrawRequested => {
                 // Poll async editor events (LSP, jobs, saves) before rendering
                 helide.poll_editor_events();
+                if let Some(pane) = &mut helide.terminal_pane {
+                    pane.poll_events();
+                }
                 if !helide.editor.should_close() {
                     helide.render();
                     if let Some(window) = &self.window {

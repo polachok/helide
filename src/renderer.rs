@@ -70,12 +70,12 @@ fn color_to_rgba(color: Color, default: [f32; 4]) -> [f32; 4] {
 }
 
 #[derive(Clone, Copy)]
-struct AtlasEntry {
-    uv: [f32; 4], // u0, v0, u1, v1
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
+pub struct AtlasEntry {
+    pub uv: [f32; 4], // u0, v0, u1, v1
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 pub struct GlyphAtlas {
@@ -318,24 +318,50 @@ impl GlyphAtlas {
         self.cache.insert(glyph_key, entry);
         entry
     }
+
+    /// Convenience method: look up (or rasterize) a glyph for the given character,
+    /// selecting the appropriate font variant based on bold/italic flags.
+    pub fn get_glyph(&mut self, queue: &wgpu::Queue, ch: char, bold: bool, italic: bool) -> AtlasEntry {
+        let font_key = match (bold, italic) {
+            (true, true) => self.bold_italic_key.unwrap_or(self.regular_key),
+            (true, false) => self.bold_key.unwrap_or(self.regular_key),
+            (false, true) => self.italic_key.unwrap_or(self.regular_key),
+            (false, false) => self.regular_key,
+        };
+        let glyph_key = GlyphKey {
+            font_key,
+            character: ch,
+            size: self.font_size,
+        };
+        self.get_or_insert(queue, glyph_key)
+    }
 }
 
 // Per-cell instance data sent to GPU
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BgInstance {
-    pos: [f32; 2],
-    size: [f32; 2],
-    color: [f32; 4],
+pub struct BgInstance {
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    pub color: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GlyphInstance {
+pub struct GlyphInstance {
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    pub uv: [f32; 4],
+    pub color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CompositeInstance {
     pos: [f32; 2],
     size: [f32; 2],
-    uv: [f32; 4],
-    color: [f32; 4],
+    uv_pos: [f32; 2],
+    uv_size: [f32; 2],
 }
 
 #[repr(C)]
@@ -356,6 +382,10 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     atlas_bind_group: wgpu::BindGroup,
+    overlay_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_sampler: wgpu::Sampler,
+    composite_bind_group_layout: wgpu::BindGroupLayout,
     pub cell_width: f32,
     pub cell_height: f32,
     pub padding_x: f32,
@@ -363,6 +393,8 @@ pub struct Renderer {
     pub padding_top: f32,
     pub default_fg: [f32; 4],
     pub default_bg: [f32; 4],
+    /// Foreground dim factor (1.0 = normal, <1.0 = dimmed). Applied to text/decorations.
+    pub fg_dim: f32,
 }
 
 impl Renderer {
@@ -515,6 +547,45 @@ impl Renderer {
             cache: None,
         });
 
+        // Overlay pipeline — same as bg but with alpha blending (for inactive pane dim)
+        let overlay_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("overlay_pipeline"),
+                layout: Some(&bg_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &bg_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<BgInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2,
+                            1 => Float32x2,
+                            2 => Float32x4,
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &bg_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+
         // Glyph pipeline
         let glyph_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -561,6 +632,88 @@ impl Renderer {
             cache: None,
         });
 
+        // Composite pipeline
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("composite_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
+        });
+
+        let composite_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("composite_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let composite_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("composite_pipeline_layout"),
+                bind_group_layouts: &[&composite_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let composite_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("composite_pipeline"),
+                layout: Some(&composite_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &composite_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<CompositeInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, // pos
+                            1 => Float32x2, // size
+                            2 => Float32x2, // uv_pos
+                            3 => Float32x2, // uv_size
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &composite_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
+
+        let composite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("composite_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let default_fg = [0.85, 0.85, 0.85, 1.0];
         let default_bg = [0.1, 0.1, 0.1, 1.0];
 
@@ -580,6 +733,10 @@ impl Renderer {
             uniform_buffer,
             uniform_bind_group,
             atlas_bind_group,
+            overlay_pipeline,
+            composite_pipeline,
+            composite_sampler,
+            composite_bind_group_layout,
             cell_width,
             cell_height,
             padding_x,
@@ -587,6 +744,7 @@ impl Renderer {
             padding_top,
             default_fg,
             default_bg,
+            fg_dim: 1.0,
         }
     }
 
@@ -614,34 +772,17 @@ impl Renderer {
             ((height as f32 - self.padding_top) % self.cell_height) / 2.0 + self.padding_top;
     }
 
-    pub fn render_grid(
+    pub fn build_instances(
         &mut self,
         grid: &[Cell],
         cols: u16,
         rows: u16,
         cursor_pos: Option<(u16, u16)>,
         cursor_kind: CursorKind,
+        bg_instances: &mut Vec<BgInstance>,
+        glyph_instances: &mut Vec<GlyphInstance>,
+        decoration_instances: &mut Vec<BgInstance>,
     ) {
-        let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(&self.device, &self.config);
-                return;
-            }
-            Err(e) => {
-                eprintln!("Surface error: {e}");
-                return;
-            }
-        };
-
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut bg_instances: Vec<BgInstance> = Vec::with_capacity((cols * rows) as usize);
-        let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
-        let mut decoration_instances: Vec<BgInstance> = Vec::new();
-
         for row in 0..rows {
             for col in 0..cols {
                 let idx = (row as usize) * (cols as usize) + (col as usize);
@@ -667,6 +808,11 @@ impl Renderer {
                 if dim {
                     fg[3] *= 0.5;
                 }
+                if self.fg_dim < 1.0 {
+                    fg[0] *= self.fg_dim;
+                    fg[1] *= self.fg_dim;
+                    fg[2] *= self.fg_dim;
+                }
 
                 // Background
                 bg_instances.push(BgInstance {
@@ -687,8 +833,6 @@ impl Renderer {
 
                     let entry = self.atlas.get_or_insert(&self.queue, glyph_key);
                     if entry.width > 0.0 {
-                        // Position glyph relative to baseline
-                        // baseline is at py + ascent, glyph top is at baseline - top
                         let gx = px + entry.left;
                         let gy = py + self.atlas.ascent - entry.top;
 
@@ -734,7 +878,6 @@ impl Renderer {
                             });
                         }
                         UnderlineStyle::Curl => {
-                            // Approximate curl with thicker underline
                             decoration_instances.push(BgInstance {
                                 pos: [px, baseline_y + 1.0],
                                 size: [self.cell_width, underline_thickness * 2.0],
@@ -742,7 +885,6 @@ impl Renderer {
                             });
                         }
                         UnderlineStyle::Dotted => {
-                            // Dotted: draw alternating segments
                             let dot_w = (self.cell_width / 4.0).max(2.0);
                             let mut dx = px;
                             while dx < px + self.cell_width {
@@ -755,7 +897,6 @@ impl Renderer {
                             }
                         }
                         UnderlineStyle::Dashed => {
-                            // Dashed: longer segments
                             let dash_w = (self.cell_width / 2.0).max(3.0);
                             let gap_w = (self.cell_width / 4.0).max(2.0);
                             let mut dx = px;
@@ -801,28 +942,142 @@ impl Renderer {
                         bg_instances.push(BgInstance {
                             pos: [px, py + cy_offset],
                             size: [cw, ch],
-                            color: self.default_fg, // cursor uses fg color
+                            color: self.default_fg,
                         });
                     }
                 }
             }
         }
+    }
 
+    /// Encode the 3-pass render (backgrounds, glyphs, decorations) into an encoder
+    /// targeting the given texture view.
+    fn encode_three_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        bg_instances: &[BgInstance],
+        glyph_instances: &[GlyphInstance],
+        decoration_instances: &[BgInstance],
+        clear: bool,
+    ) {
         let bg_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("bg_instances"),
-                contents: bytemuck::cast_slice(&bg_instances),
+                contents: bytemuck::cast_slice(bg_instances),
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        let glyph_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("glyph_instances"),
-                contents: bytemuck::cast_slice(&glyph_instances),
-                usage: wgpu::BufferUsages::VERTEX,
+        let glyph_buffer = if !glyph_instances.is_empty() {
+            Some(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("glyph_instances"),
+                        contents: bytemuck::cast_slice(glyph_instances),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+            )
+        } else {
+            None
+        };
+
+        {
+            let load_op = if clear {
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: self.default_bg[0] as f64,
+                    g: self.default_bg[1] as f64,
+                    b: self.default_bg[2] as f64,
+                    a: 1.0,
+                })
+            } else {
+                wgpu::LoadOp::Load
+            };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("three_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: load_op,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
             });
+
+            // Draw backgrounds
+            pass.set_pipeline(&self.bg_pipeline);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_vertex_buffer(0, bg_buffer.slice(..));
+            pass.draw(0..4, 0..bg_instances.len() as u32);
+
+            // Draw glyphs
+            if let Some(ref glyph_buf) = glyph_buffer {
+                pass.set_pipeline(&self.glyph_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+                pass.set_vertex_buffer(0, glyph_buf.slice(..));
+                pass.draw(0..4, 0..glyph_instances.len() as u32);
+            }
+
+            // Draw decorations
+            if !decoration_instances.is_empty() {
+                let decoration_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("decoration_instances"),
+                            contents: bytemuck::cast_slice(decoration_instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                pass.set_pipeline(&self.bg_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, decoration_buffer.slice(..));
+                pass.draw(0..4, 0..decoration_instances.len() as u32);
+            }
+        }
+    }
+
+    pub fn render_grid(
+        &mut self,
+        grid: &[Cell],
+        cols: u16,
+        rows: u16,
+        cursor_pos: Option<(u16, u16)>,
+        cursor_kind: CursorKind,
+    ) {
+        let output = match self.surface.get_current_texture() {
+            Ok(t) => t,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Surface error: {e}");
+                return;
+            }
+        };
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut bg_instances: Vec<BgInstance> = Vec::with_capacity((cols * rows) as usize);
+        let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
+        let mut decoration_instances: Vec<BgInstance> = Vec::new();
+
+        self.build_instances(
+            grid,
+            cols,
+            rows,
+            cursor_pos,
+            cursor_kind,
+            &mut bg_instances,
+            &mut glyph_instances,
+            &mut decoration_instances,
+        );
 
         let mut encoder = self
             .device
@@ -830,11 +1085,208 @@ impl Renderer {
                 label: Some("render_encoder"),
             });
 
+        self.encode_three_pass(
+            &mut encoder,
+            &view,
+            &bg_instances,
+            &glyph_instances,
+            &decoration_instances,
+            true,
+        );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+
+    /// Create an offscreen texture suitable for rendering a region.
+    pub fn create_region_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("region_texture"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    /// Render a cell grid to an offscreen texture view instead of the swapchain.
+    /// Temporarily writes region dimensions to the uniform buffer, renders,
+    /// then restores the full-window uniforms.
+    pub fn render_grid_to_texture(
+        &mut self,
+        grid: &[Cell],
+        cols: u16,
+        rows: u16,
+        cursor_pos: Option<(u16, u16)>,
+        cursor_kind: CursorKind,
+        texture_view: &wgpu::TextureView,
+        region_width: u32,
+        region_height: u32,
+    ) {
+        // Write region dimensions to uniform buffer
+        let region_uniforms = Uniforms {
+            screen_size: [region_width as f32, region_height as f32],
+            _pad: [0.0; 2],
+        };
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&region_uniforms),
+        );
+
+        let mut bg_instances: Vec<BgInstance> = Vec::with_capacity((cols * rows) as usize);
+        let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
+        let mut decoration_instances: Vec<BgInstance> = Vec::new();
+
+        // Save and override padding for region-local coordinates.
+        // Preserve padding_top so titlebar space is maintained in the editor region.
+        let saved_padding_x = self.padding_x;
+        let saved_padding_y = self.padding_y;
+        self.padding_x = (region_width as f32 % self.cell_width) / 2.0;
+        self.padding_y =
+            ((region_height as f32 - self.padding_top) % self.cell_height) / 2.0 + self.padding_top;
+
+        self.build_instances(
+            grid,
+            cols,
+            rows,
+            cursor_pos,
+            cursor_kind,
+            &mut bg_instances,
+            &mut glyph_instances,
+            &mut decoration_instances,
+        );
+
+        // Restore padding
+        self.padding_x = saved_padding_x;
+        self.padding_y = saved_padding_y;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render_to_texture_encoder"),
+            });
+
+        self.encode_three_pass(
+            &mut encoder,
+            texture_view,
+            &bg_instances,
+            &glyph_instances,
+            &decoration_instances,
+            true,
+        );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Restore full-window uniforms
+        let full_uniforms = Uniforms {
+            screen_size: [self.config.width as f32, self.config.height as f32],
+            _pad: [0.0; 2],
+        };
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&full_uniforms),
+        );
+    }
+
+    /// Render pre-built instance vectors to a texture view (no Cell conversion).
+    /// Used by the terminal pane which builds instances directly.
+    pub fn render_instances_to_texture(
+        &self,
+        bg_instances: &[BgInstance],
+        glyph_instances: &[GlyphInstance],
+        decoration_instances: &[BgInstance],
+        texture_view: &wgpu::TextureView,
+        region_width: u32,
+        region_height: u32,
+    ) {
+        // Write region dimensions to uniform buffer
+        let region_uniforms = Uniforms {
+            screen_size: [region_width as f32, region_height as f32],
+            _pad: [0.0; 2],
+        };
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&region_uniforms),
+        );
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render_instances_to_texture_encoder"),
+            });
+
+        self.encode_three_pass(
+            &mut encoder,
+            texture_view,
+            bg_instances,
+            glyph_instances,
+            decoration_instances,
+            true,
+        );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Restore full-window uniforms
+        let full_uniforms = Uniforms {
+            screen_size: [self.config.width as f32, self.config.height as f32],
+            _pad: [0.0; 2],
+        };
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&full_uniforms),
+        );
+    }
+
+    /// Composite region textures onto the swapchain.
+    /// Each region is a texture view and a pixel rect (x, y, width, height).
+    pub fn composite(&self, regions: &[(&wgpu::TextureView, (u32, u32, u32, u32))]) {
+        let output = match self.surface.get_current_texture() {
+            Ok(t) => t,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Surface error: {e}");
+                return;
+            }
+        };
+
+        let swapchain_view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let screen_w = self.config.width as f32;
+        let screen_h = self.config.height as f32;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("composite_encoder"),
+            });
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main_pass"),
+                label: Some("composite_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &swapchain_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -850,35 +1302,50 @@ impl Renderer {
                 ..Default::default()
             });
 
-            // Draw backgrounds
-            pass.set_pipeline(&self.bg_pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, bg_buffer.slice(..));
-            pass.draw(0..4, 0..bg_instances.len() as u32);
+            pass.set_pipeline(&self.composite_pipeline);
 
-            // Draw glyphs
-            if !glyph_instances.is_empty() {
-                pass.set_pipeline(&self.glyph_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &self.atlas_bind_group, &[]);
-                pass.set_vertex_buffer(0, glyph_buffer.slice(..));
-                pass.draw(0..4, 0..glyph_instances.len() as u32);
-            }
+            for &(texture_view, (x, y, w, h)) in regions {
+                // Convert pixel rect to clip space [-1, 1]
+                let clip_x = (x as f32 / screen_w) * 2.0 - 1.0;
+                let clip_y = 1.0 - (y as f32 / screen_h) * 2.0; // flip Y
+                let clip_w = (w as f32 / screen_w) * 2.0;
+                let clip_h = -((h as f32 / screen_h) * 2.0); // negative because Y is flipped
 
-            // Draw decorations (underlines, strikethrough, cursor overlay)
-            if !decoration_instances.is_empty() {
-                let decoration_buffer =
+                let instance = CompositeInstance {
+                    pos: [clip_x, clip_y],
+                    size: [clip_w, clip_h],
+                    uv_pos: [0.0, 0.0],
+                    uv_size: [1.0, 1.0],
+                };
+
+                let instance_buffer =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("decoration_instances"),
-                            contents: bytemuck::cast_slice(&decoration_instances),
+                            label: Some("composite_instance"),
+                            contents: bytemuck::bytes_of(&instance),
                             usage: wgpu::BufferUsages::VERTEX,
                         });
-                pass.set_pipeline(&self.bg_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, decoration_buffer.slice(..));
-                pass.draw(0..4, 0..decoration_instances.len() as u32);
+
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("composite_region_bg"),
+                    layout: &self.composite_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.composite_sampler),
+                        },
+                    ],
+                });
+
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                pass.draw(0..4, 0..1);
             }
+
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
