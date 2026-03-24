@@ -472,6 +472,23 @@ impl ApplicationHandler<UserEvent> for WinitApp {
     }
 }
 
+/// Inherit PATH from the user's login shell.
+/// macOS GUI apps get a minimal PATH; this gives us the real one.
+fn inherit_shell_path() {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    if let Ok(output) = std::process::Command::new(&shell)
+        .args(["-l", "-c", "echo $PATH"])
+        .output()
+    {
+        if let Ok(path) = String::from_utf8(output.stdout) {
+            let path = path.trim();
+            if !path.is_empty() {
+                std::env::set_var("PATH", path);
+            }
+        }
+    }
+}
+
 /// Load direnv environment variables for the given directory.
 fn load_direnv(dir: &std::path::Path) {
     let Ok(output) = std::process::Command::new("direnv")
@@ -479,7 +496,7 @@ fn load_direnv(dir: &std::path::Path) {
         .current_dir(dir)
         .output()
     else {
-        return; // direnv not installed
+        return;
     };
 
     if !output.status.success() {
@@ -539,6 +556,9 @@ fn load_direnv_with_status(dir: &std::path::Path, editor: Option<&mut helix_view
 }
 
 fn main() {
+    // Inherit the user's login shell PATH (macOS GUI apps get minimal PATH)
+    inherit_shell_path();
+
     // Load direnv if .envrc exists in cwd
     if std::path::Path::new(".envrc").exists() {
         load_direnv(&std::env::current_dir().unwrap_or_default());
