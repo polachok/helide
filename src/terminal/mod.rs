@@ -74,6 +74,7 @@ impl TerminalPane {
         width: u32,
         height: u32,
         winit_proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
+        working_dir: Option<std::path::PathBuf>,
     ) -> anyhow::Result<Self> {
         let cell_width = renderer.cell_width;
         let cell_height = renderer.cell_height;
@@ -100,7 +101,12 @@ impl TerminalPane {
             cell_height: cell_height as u16,
         };
 
-        let pty = tty::new(&tty::Options::default(), window_size, 0)?;
+        let mut pty_options = tty::Options::default();
+        pty_options.env.insert("TERM".to_string(), "xterm-256color".to_string());
+        // If launched from GUI (parent is launchd, pid 1), use $HOME.
+        // If launched from terminal, use cwd.
+        pty_options.working_directory = working_dir;
+        let pty = tty::new(&pty_options, window_size, 0)?;
 
         let pty_event_loop =
             PtyEventLoop::new(term.clone(), event_proxy, pty, false, false)?;

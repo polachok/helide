@@ -185,8 +185,16 @@ impl HelideApp {
         if now_visible && self.terminal_pane.is_none() {
             let regions = self.layout.regions();
             if let Some((_, _, tw, th)) = regions.terminal {
+                // Use the current document's directory, or editor cwd, or $HOME
+                let working_dir = {
+                    let (_view, doc) = helix_view::current_ref!(&self.editor);
+                    doc.path()
+                        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                        .or_else(|| std::env::current_dir().ok())
+                        .or_else(|| dirs::home_dir())
+                };
                 let renderer = self.terminal.backend().renderer();
-                match crate::terminal::TerminalPane::new(renderer, tw, th, self.event_proxy.clone()) {
+                match crate::terminal::TerminalPane::new(renderer, tw, th, self.event_proxy.clone(), working_dir) {
                     Ok(pane) => self.terminal_pane = Some(pane),
                     Err(e) => {
                         log::error!("Failed to create terminal pane: {e}");
