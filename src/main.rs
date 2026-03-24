@@ -484,12 +484,39 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let cell_size = Self::cell_size(helide);
-                let events =
-                    self.scroll
-                        .accumulate(delta, self.cursor_position, cell_size, &self.modifiers);
-                for hx_event in events {
-                    helide.handle_event(hx_event);
+                match helide.focus {
+                    app::Focus::Editor => {
+                        let cell_size = Self::cell_size(helide);
+                        let events = self.scroll.accumulate(
+                            delta, self.cursor_position, cell_size, &self.modifiers,
+                        );
+                        for hx_event in events {
+                            helide.handle_event(hx_event);
+                        }
+                    }
+                    app::Focus::Terminal => {
+                        if let Some(pane) = &mut helide.terminal_pane {
+                            use alacritty_terminal::grid::Scroll;
+                            let cell_size = (pane.cell_width, pane.cell_height);
+                            let fake_events = self.scroll.accumulate(
+                                delta, self.cursor_position, cell_size, &self.modifiers,
+                            );
+                            let mut scroll_lines: i32 = 0;
+                            for ev in &fake_events {
+                                if let helix_term::compositor::Event::Mouse(me) = ev {
+                                    match me.kind {
+                                        helix_view::input::MouseEventKind::ScrollUp => scroll_lines += 1,
+                                        helix_view::input::MouseEventKind::ScrollDown => scroll_lines -= 1,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            if scroll_lines != 0 {
+                                pane.term.lock().scroll_display(Scroll::Delta(scroll_lines));
+                                pane.dirty = true;
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::DroppedFile(path) => {

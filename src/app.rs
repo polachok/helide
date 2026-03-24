@@ -114,7 +114,6 @@ impl HelideApp {
         let layout = crate::layout::Layout::new(
             terminal.backend().renderer().config.width,
             terminal.backend().renderer().config.height,
-            terminal.backend().renderer().padding_top,
         );
 
         Ok(HelideApp {
@@ -323,10 +322,10 @@ impl HelideApp {
                 (backend.region_view(), regions_info.editor),
                 (pane.region_view(), term_rect),
             ];
-            backend.renderer().composite(&regions);
+            backend.renderer().composite(&regions, regions_info.divider);
         } else {
             let regions = [(backend.region_view(), regions_info.editor)];
-            backend.renderer().composite(&regions);
+            backend.renderer().composite(&regions, None);
         }
     }
 

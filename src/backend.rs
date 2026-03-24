@@ -61,11 +61,6 @@ impl GpuBackend {
         self.renderer.default_bg = bg;
     }
 
-    /// Recalculate grid dimensions after a window resize.
-    pub fn set_padding_top(&mut self, padding: f32) {
-        self.renderer.set_padding_top(padding);
-    }
-
     /// Resize the editor region (texture + grid). Does NOT resize the swapchain surface.
     /// Call `handle_window_resize()` for actual window resize.
     pub fn handle_resize(&mut self, width: u32, height: u32) {
@@ -95,10 +90,6 @@ impl GpuBackend {
 
     pub fn region_view(&self) -> &wgpu::TextureView {
         &self.region_view
-    }
-
-    pub fn region_rect(&self) -> (u32, u32, u32, u32) {
-        (0, 0, self.region_width, self.region_height)
     }
 
     pub fn renderer(&self) -> &Renderer {

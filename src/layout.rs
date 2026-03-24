@@ -13,8 +13,6 @@ pub struct Layout {
     /// Total window size in pixels.
     window_width: u32,
     window_height: u32,
-    /// Titlebar padding (macOS transparent titlebar).
-    padding_top: f32,
 }
 
 /// Pixel regions computed from the layout.
@@ -33,7 +31,7 @@ const MAX_RATIO: f32 = 0.85;
 const DEFAULT_RATIO: f32 = 0.7;
 
 impl Layout {
-    pub fn new(window_width: u32, window_height: u32, padding_top: f32) -> Self {
+    pub fn new(window_width: u32, window_height: u32) -> Self {
         Self {
             terminal_visible: false,
             split_ratio: DEFAULT_RATIO,
@@ -41,7 +39,6 @@ impl Layout {
             drag_start_ratio: DEFAULT_RATIO,
             window_width,
             window_height,
-            padding_top,
         }
     }
 
@@ -49,10 +46,6 @@ impl Layout {
     pub fn set_window_size(&mut self, width: u32, height: u32) {
         self.window_width = width;
         self.window_height = height;
-    }
-
-    pub fn set_padding_top(&mut self, padding: f32) {
-        self.padding_top = padding;
     }
 
     /// Toggle terminal visibility. Returns true if now visible.

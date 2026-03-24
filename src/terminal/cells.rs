@@ -4,7 +4,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-use crate::renderer::{AtlasEntry, BgInstance, GlyphAtlas, GlyphInstance};
+use crate::renderer::{BgInstance, GlyphAtlas, GlyphInstance};
 
 /// ANSI 256-color palette (first 16 standard terminal colors).
 const ANSI_COLORS: [[u8; 3]; 16] = [
@@ -66,8 +66,6 @@ fn named_color_to_rgba(named: NamedColor, default: [f32; 4]) -> [f32; 4] {
         NamedColor::DimCyan => dim_color(indexed_color_to_rgba(6, default)),
         NamedColor::DimWhite => dim_color(indexed_color_to_rgba(7, default)),
         NamedColor::BrightForeground | NamedColor::DimForeground => default,
-        // Catch any future variants
-        _ => default,
     }
 }
 
@@ -115,14 +113,17 @@ pub fn build_terminal_instances<T: alacritty_terminal::event::EventListener>(
     let grid = term.grid();
     let num_lines = grid.screen_lines();
     let num_cols = grid.columns();
+    let display_offset = grid.display_offset();
 
     let mut bg_instances = Vec::with_capacity(num_lines * num_cols);
     let mut glyph_instances = Vec::new();
     let mut decoration_instances = Vec::new();
 
     for row_idx in 0..num_lines {
+        // Adjust line index for scroll offset: negative lines index into history
+        let line = Line(row_idx as i32) - display_offset;
         for col_idx in 0..num_cols {
-            let cell = &grid[Line(row_idx as i32)][Column(col_idx)];
+            let cell = &grid[line][Column(col_idx)];
             let ch = cell.c;
             let flags = cell.flags;
 
@@ -255,11 +256,11 @@ pub fn build_terminal_instances<T: alacritty_terminal::event::EventListener>(
         }
     }
 
-    // Cursor
+    // Cursor — only show when not scrolled back
     let cursor = grid.cursor.point;
     let cursor_row = cursor.line.0 as usize;
     let cursor_col = cursor.column.0;
-    if show_cursor && cursor_row < num_lines && cursor_col < num_cols {
+    if show_cursor && display_offset == 0 && cursor_row < num_lines && cursor_col < num_cols {
         let cx = cursor_col as f32 * cell_width;
         let cy = cursor_row as f32 * cell_height;
         // Block cursor: draw a filled rectangle with the foreground color

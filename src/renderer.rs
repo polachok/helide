@@ -382,7 +382,6 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     atlas_bind_group: wgpu::BindGroup,
-    overlay_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     composite_sampler: wgpu::Sampler,
     composite_bind_group_layout: wgpu::BindGroupLayout,
@@ -547,45 +546,6 @@ impl Renderer {
             cache: None,
         });
 
-        // Overlay pipeline — same as bg but with alpha blending (for inactive pane dim)
-        let overlay_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("overlay_pipeline"),
-                layout: Some(&bg_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &bg_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<BgInstance>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![
-                            0 => Float32x2,
-                            1 => Float32x2,
-                            2 => Float32x4,
-                        ],
-                    }],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &bg_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-                cache: None,
-            });
-
         // Glyph pipeline
         let glyph_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -733,7 +693,6 @@ impl Renderer {
             uniform_buffer,
             uniform_bind_group,
             atlas_bind_group,
-            overlay_pipeline,
             composite_pipeline,
             composite_sampler,
             composite_bind_group_layout,
@@ -1040,63 +999,7 @@ impl Renderer {
         }
     }
 
-    pub fn render_grid(
-        &mut self,
-        grid: &[Cell],
-        cols: u16,
-        rows: u16,
-        cursor_pos: Option<(u16, u16)>,
-        cursor_kind: CursorKind,
-    ) {
-        let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(&self.device, &self.config);
-                return;
-            }
-            Err(e) => {
-                eprintln!("Surface error: {e}");
-                return;
-            }
-        };
 
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut bg_instances: Vec<BgInstance> = Vec::with_capacity((cols * rows) as usize);
-        let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
-        let mut decoration_instances: Vec<BgInstance> = Vec::new();
-
-        self.build_instances(
-            grid,
-            cols,
-            rows,
-            cursor_pos,
-            cursor_kind,
-            &mut bg_instances,
-            &mut glyph_instances,
-            &mut decoration_instances,
-        );
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render_encoder"),
-            });
-
-        self.encode_three_pass(
-            &mut encoder,
-            &view,
-            &bg_instances,
-            &glyph_instances,
-            &decoration_instances,
-            true,
-        );
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-    }
 
     /// Create an offscreen texture suitable for rendering a region.
     pub fn create_region_texture(
@@ -1256,7 +1159,12 @@ impl Renderer {
 
     /// Composite region textures onto the swapchain.
     /// Each region is a texture view and a pixel rect (x, y, width, height).
-    pub fn composite(&self, regions: &[(&wgpu::TextureView, (u32, u32, u32, u32))]) {
+    /// `divider`: optional pixel rect for a divider bar between regions.
+    pub fn composite(
+        &self,
+        regions: &[(&wgpu::TextureView, (u32, u32, u32, u32))],
+        divider: Option<(u32, u32, u32, u32)>,
+    ) {
         let output = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1346,6 +1254,43 @@ impl Renderer {
                 pass.draw(0..4, 0..1);
             }
 
+            // Draw divider bar
+            if let Some((dx, dy, dw, dh)) = divider {
+                let uniforms = Uniforms {
+                    screen_size: [screen_w, screen_h],
+                    _pad: [0.0; 2],
+                };
+                self.queue.write_buffer(
+                    &self.uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&uniforms),
+                );
+
+                // Slightly lighter than background for a subtle separator
+                let divider_color = [
+                    (self.default_bg[0] + 0.15).min(1.0),
+                    (self.default_bg[1] + 0.15).min(1.0),
+                    (self.default_bg[2] + 0.15).min(1.0),
+                    1.0,
+                ];
+                let divider_instance = BgInstance {
+                    pos: [dx as f32, dy as f32],
+                    size: [dw as f32, dh as f32],
+                    color: divider_color,
+                };
+                let divider_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("divider"),
+                            contents: bytemuck::bytes_of(&divider_instance),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+
+                pass.set_pipeline(&self.bg_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, divider_buffer.slice(..));
+                pass.draw(0..4, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
