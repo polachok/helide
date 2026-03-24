@@ -81,6 +81,11 @@ jobs:
           # Language config
           [ -f helix/languages.toml ] && cp helix/languages.toml "${RESOURCES}/runtime/"
 
+      - name: Ad-hoc code sign
+        run: |
+          APP="target/${{ matrix.target }}/release/bundle/osx/Helide.app"
+          codesign --force --deep --sign - "${APP}"
+
       - name: Create DMG
         run: |
           RELEASE_DIR="target/${{ matrix.target }}/release"
