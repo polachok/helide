@@ -50,6 +50,23 @@ pub fn flush_pending_files() {
 
 /// Note a file as recently opened (shows in File > Open Recent).
 /// Note a file as recently opened and refresh the Open Recent menu.
+/// Set window appearance (light/dark) based on background luminance.
+/// This affects titlebar text color and traffic light styling.
+pub fn set_window_appearance_for_bg(bg: [f32; 4]) {
+    use objc2_app_kit::NSAppearance;
+    let mtm = MainThreadMarker::new().unwrap();
+    // Perceived luminance
+    let lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2];
+    let name = if lum > 0.5 {
+        ns_string!("NSAppearanceNameAqua")
+    } else {
+        ns_string!("NSAppearanceNameDarkAqua")
+    };
+    let appearance = NSAppearance::appearanceNamed(name);
+    let app = NSApplication::sharedApplication(mtm);
+    app.setAppearance(appearance.as_deref());
+}
+
 pub fn note_recent_document(path: &std::path::Path) {
     use objc2_foundation::NSURL;
     let mtm = MainThreadMarker::new().unwrap();

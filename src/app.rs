@@ -26,6 +26,7 @@ pub struct HelideApp {
     pub config: Arc<ArcSwap<Config>>,
     pub jobs: Jobs,
     pub lsp_progress: LspProgressMap,
+    last_theme_name: String,
 }
 
 impl HelideApp {
@@ -105,6 +106,8 @@ impl HelideApp {
             }
         }
 
+        let last_theme_name = editor.theme.name().to_string();
+
         Ok(HelideApp {
             compositor,
             terminal,
@@ -112,6 +115,7 @@ impl HelideApp {
             config,
             jobs,
             lsp_progress: LspProgressMap::new(),
+            last_theme_name,
         })
     }
 
@@ -150,6 +154,13 @@ impl HelideApp {
 
     /// Render the editor state to the GPU.
     pub fn render(&mut self) {
+        // Update renderer colors if theme changed
+        let theme_name = self.editor.theme.name();
+        if theme_name != self.last_theme_name {
+            self.last_theme_name = theme_name.to_string();
+            update_renderer_theme(&self.editor.theme, self.terminal.backend_mut());
+        }
+
         // GPU rendering is cheap — always do a full redraw
         let _ = self.terminal.clear();
 
@@ -679,4 +690,7 @@ fn update_renderer_theme(theme: &helix_view::Theme, backend: &mut crate::backend
     };
 
     backend.set_default_colors(default_fg, default_bg);
+
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::set_window_appearance_for_bg(default_bg);
 }
