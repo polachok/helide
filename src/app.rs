@@ -131,6 +131,16 @@ impl HelideApp {
         })
     }
 
+    /// Returns Replace if current doc is an unmodified scratch buffer, otherwise VerticalSplit.
+    pub fn open_action(&self) -> helix_view::editor::Action {
+        let (_view, doc) = helix_view::current_ref!(&self.editor);
+        if doc.path().is_none() && !doc.is_modified() {
+            helix_view::editor::Action::Replace
+        } else {
+            helix_view::editor::Action::VerticalSplit
+        }
+    }
+
     /// Handle a helix Event (key, mouse, resize, etc.)
     pub fn handle_event(&mut self, event: Event) -> bool {
         let mut cx = Context {

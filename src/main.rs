@@ -252,16 +252,17 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             }
             UserEvent::OpenFile(path) => {
                 if let Some(helide) = &mut self.helide {
-                    if let Err(e) = helide
-                        .editor
-                        .open(&path, helix_view::editor::Action::VerticalSplit)
-                    {
+                    let action = helide.open_action();
+                    if let Err(e) = helide.editor.open(&path, action) {
                         helide.editor.set_error(format!("Failed to open: {e}"));
                     } else {
                         #[cfg(target_os = "macos")]
                         platform::macos::note_recent_document(&path);
                     }
                     helide.render();
+                    if let Some(window) = &self.window {
+                        window.set_title(&helide.title());
+                    }
                 }
             }
             UserEvent::OpenDirectory(path) => {
@@ -436,6 +437,9 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         let should_close = {
                             if let Some(hx_event) = input::convert_key_event(&event, &self.modifiers) {
                                 helide.handle_event(hx_event);
+                                if let Some(window) = &self.window {
+                                    window.set_title(&helide.title());
+                                }
                                 helide.editor.should_close()
                             } else {
                                 false
@@ -563,10 +567,8 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         .unwrap_or(false);
 
                 if should_open {
-                    if let Err(e) = helide
-                        .editor
-                        .open(&path, helix_view::editor::Action::VerticalSplit)
-                    {
+                    let action = helide.open_action();
+                    if let Err(e) = helide.editor.open(&path, action) {
                         helide.editor.set_error(format!("Failed to open: {e}"));
                     }
                     helide.render();
