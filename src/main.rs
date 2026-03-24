@@ -259,9 +259,15 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                             .editor
                             .set_error(format!("Failed to change directory: {e}"));
                     } else {
+                        let has_envrc = path.join(".envrc").exists();
                         helide
                             .editor
                             .set_status(format!("Changed directory to {}", path.display()));
+                        if has_envrc {
+                            helide.editor.set_status("Loading direnv...");
+                            helide.render();
+                            load_direnv_with_status(&path, Some(&mut helide.editor));
+                        }
                     }
                     helide.render();
                 }
@@ -466,7 +472,78 @@ impl ApplicationHandler<UserEvent> for WinitApp {
     }
 }
 
+/// Load direnv environment variables for the given directory.
+fn load_direnv(dir: &std::path::Path) {
+    let Ok(output) = std::process::Command::new("direnv")
+        .args(["export", "json"])
+        .current_dir(dir)
+        .output()
+    else {
+        return; // direnv not installed
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    let Ok(vars) =
+        serde_json::from_slice::<std::collections::HashMap<String, String>>(&output.stdout)
+    else {
+        return;
+    };
+
+    let count = vars.len();
+    for (key, value) in vars {
+        std::env::set_var(&key, &value);
+    }
+    log::info!("direnv: loaded {count} env vars");
+}
+
+/// Load direnv and report to the editor status line.
+fn load_direnv_with_status(dir: &std::path::Path, editor: Option<&mut helix_view::Editor>) {
+    if !dir.join(".envrc").exists() {
+        return;
+    }
+
+    let Ok(output) = std::process::Command::new("direnv")
+        .args(["export", "json"])
+        .current_dir(dir)
+        .output()
+    else {
+        if let Some(editor) = editor {
+            editor.set_status("direnv: not installed");
+        }
+        return;
+    };
+
+    if !output.status.success() {
+        if let Some(editor) = editor {
+            editor.set_error("direnv: failed to export environment");
+        }
+        return;
+    }
+
+    let Ok(vars) =
+        serde_json::from_slice::<std::collections::HashMap<String, String>>(&output.stdout)
+    else {
+        return;
+    };
+
+    let count = vars.len();
+    for (key, value) in &vars {
+        std::env::set_var(key, value);
+    }
+    if let Some(editor) = editor {
+        editor.set_status(format!("direnv: loaded {count} env vars"));
+    }
+}
+
 fn main() {
+    // Load direnv if .envrc exists in cwd
+    if std::path::Path::new(".envrc").exists() {
+        load_direnv(&std::env::current_dir().unwrap_or_default());
+    }
+
     // Set up tokio runtime — needed for helix async operations (LSP, jobs, word index)
     let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let _guard = runtime.enter();
