@@ -124,6 +124,14 @@ if [ "$GENERATE_DMG" == "true" ]; then
   echo "Created '${APP_DIR}/${DMG_NAME}'"
 fi
 
+# --- Step 7: Install to /Applications (optional) ---
+if [ "$INSTALL" == "true" ]; then
+  echo "Installing to /Applications..."
+  cp -fRp "${APP_DIR}/${APP_NAME}" /Applications/
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/${APP_NAME}
+  echo "Installed and registered."
+fi
+
 echo ""
 echo "Done."
 echo "  App: ${APP_DIR}/${APP_NAME}"
