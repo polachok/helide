@@ -1,3 +1,4 @@
 [submodule "helix"]
 	path = helix
-	url = https://github.com/helix-editor/helix
+	url = https://github.com/polachok/helix
+	branch = for-helide

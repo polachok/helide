@@ -11,9 +11,6 @@ use helix_term::ui;
 use helix_tui::backend::Backend;
 use helix_tui::terminal::Terminal;
 use helix_view::graphics::Rect;
-use helix_view::handlers::completion::CompletionHandler;
-use helix_view::handlers::word_index;
-use helix_view::handlers::Handlers;
 use helix_view::theme;
 use helix_view::Editor;
 
@@ -31,9 +28,6 @@ pub struct HelideApp {
 
 impl HelideApp {
     pub fn new(backend: GpuBackend, config: Config, files: Vec<PathBuf>) -> anyhow::Result<Self> {
-        // Register helix-term events (required before creating handlers)
-        helix_term::events::register();
-
         let area = backend.size()?;
         let mut terminal = Terminal::new(backend)?;
 
@@ -44,9 +38,8 @@ impl HelideApp {
 
         let config = Arc::new(ArcSwap::from_pointee(config));
 
-        // Create handlers with dummy channels for LSP features.
-        // word_index is real since it's self-contained.
-        let handlers = create_handlers();
+        // Use helix-term's full handler setup (completion, signature help, etc.)
+        let handlers = helix_term::handlers::setup(config.clone());
 
         let lang_loader = helix_core::config::user_lang_loader()
             .unwrap_or_else(|_| helix_core::config::default_lang_loader());
@@ -651,26 +644,6 @@ impl HelideApp {
 
 /// Create Handlers with dummy channels for LSP features.
 /// This allows the editor to work for basic editing without full LSP support.
-fn create_handlers() -> Handlers {
-    let (completion_tx, _) = tokio::sync::mpsc::channel(1);
-    let (sig_tx, _) = tokio::sync::mpsc::channel(1);
-    let (auto_save_tx, _) = tokio::sync::mpsc::channel(1);
-    let (doc_colors_tx, _) = tokio::sync::mpsc::channel(1);
-    let (doc_links_tx, _) = tokio::sync::mpsc::channel(1);
-    let (pull_diag_tx, _) = tokio::sync::mpsc::channel(1);
-    let (pull_all_diag_tx, _) = tokio::sync::mpsc::channel(1);
-
-    Handlers {
-        completions: CompletionHandler::new(completion_tx),
-        signature_hints: sig_tx,
-        auto_save: auto_save_tx,
-        document_colors: doc_colors_tx,
-        document_links: doc_links_tx,
-        word_index: word_index::Handler::spawn(),
-        pull_diagnostics: pull_diag_tx,
-        pull_all_documents_diagnostics: pull_all_diag_tx,
-    }
-}
 
 /// Extract default fg/bg colors from the helix theme and apply to the GPU backend.
 fn update_renderer_theme(theme: &helix_view::Theme, backend: &mut crate::backend::GpuBackend) {

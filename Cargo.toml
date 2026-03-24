@@ -3,20 +3,21 @@ name = "helide"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
+default-run = "helide"
 
 [[bin]]
 name = "helide"
 path = "src/main.rs"
 
 [dependencies]
-helix-term = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-tui = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-view = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-core = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-lsp = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-loader = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-event = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
-helix-stdx = { git = "https://github.com/helix-editor/helix", rev = "3d68e0a" }
+helix-term = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-tui = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-view = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-core = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-lsp = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-loader = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-event = { git = "https://github.com/polachok/helix", branch = "for-helide" }
+helix-stdx = { git = "https://github.com/polachok/helix", branch = "for-helide" }
 
 winit = "0.30"
 wgpu = "24"
@@ -41,3 +42,4 @@ serde = { version = "1", features = ["derive"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSProcessInfo", "NSURL", "NSArray", "NSObject", "NSDictionary", "NSUserDefaults", "NSValue"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSMenu", "NSMenuItem", "NSEvent", "NSResponder", "NSRunningApplication", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSWindow", "NSDocumentController", "NSAppearance"] }
+

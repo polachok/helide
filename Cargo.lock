@@ -2044,7 +2044,7 @@ dependencies = [
 [[package]]
 name = "helix-core"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2081,7 +2081,7 @@ dependencies = [
 [[package]]
 name = "helix-dap"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "futures-executor",
@@ -2102,7 +2102,7 @@ dependencies = [
 [[package]]
 name = "helix-dap-types"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "serde",
  "serde_json",
@@ -2111,7 +2111,7 @@ dependencies = [
 [[package]]
 name = "helix-event"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "foldhash 0.2.0",
@@ -2126,7 +2126,7 @@ dependencies = [
 [[package]]
 name = "helix-loader"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "cc",
@@ -2144,7 +2144,7 @@ dependencies = [
 [[package]]
 name = "helix-lsp"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2169,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "helix-lsp-types"
 version = "0.95.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "bitflags 2.11.0",
  "serde",
@@ -2180,12 +2180,12 @@ dependencies = [
 [[package]]
 name = "helix-parsec"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 
 [[package]]
 name = "helix-stdx"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "bitflags 2.11.0",
  "dunce",
@@ -2203,7 +2203,7 @@ dependencies = [
 [[package]]
 name = "helix-term"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2249,7 +2249,7 @@ dependencies = [
 [[package]]
 name = "helix-tui"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "bitflags 2.11.0",
  "cassowary",
@@ -2266,7 +2266,7 @@ dependencies = [
 [[package]]
 name = "helix-vcs"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2282,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "helix-view"
 version = "25.7.1"
-source = "git+https://github.com/helix-editor/helix?rev=3d68e0a#3d68e0a32617d1844543219f6790a2b3fa169170"
+source = "git+https://github.com/polachok/helix?branch=for-helide#c406e175c365a1df6e0f48f1a7ecb4a872e696ab"
 dependencies = [
  "anyhow",
  "arc-swap",
