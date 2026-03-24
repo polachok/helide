@@ -219,6 +219,22 @@ impl HelideApp {
         self.render();
     }
 
+    /// Hide the terminal pane (if visible).
+    pub fn hide_terminal(&mut self) {
+        if !self.layout.terminal_visible {
+            return;
+        }
+        self.layout.toggle_terminal();
+        self.focus = Focus::Editor;
+        self.terminal.backend_mut().renderer_mut().fg_dim = 1.0;
+        let regions = self.layout.regions();
+        let (_, _, ew, eh) = regions.editor;
+        self.terminal.backend_mut().handle_resize(ew, eh);
+        let backend_size = self.terminal.backend().size().unwrap();
+        self.handle_resize(backend_size.width, backend_size.height);
+        self.render();
+    }
+
     /// Render the editor state to the GPU.
     pub fn render(&mut self) {
         // Update renderer colors if theme changed

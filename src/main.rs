@@ -35,6 +35,8 @@ pub enum UserEvent {
     Redo,
     Paste,
     Tutor,
+    ToggleTerminal,
+    HideTerminal,
 }
 
 struct WinitApp {
@@ -328,6 +330,16 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         helix_view::doc_mut!(helide.editor).set_path(None);
                     }
                     helide.render();
+                }
+            }
+            UserEvent::ToggleTerminal => {
+                if let Some(helide) = &mut self.helide {
+                    helide.toggle_terminal();
+                }
+            }
+            UserEvent::HideTerminal => {
+                if let Some(helide) = &mut self.helide {
+                    helide.hide_terminal();
                 }
             }
             UserEvent::CloseBuffer => {

@@ -148,18 +148,16 @@ define_class!(
         #[unsafe(method(openFile:))]
         fn open_file(&self, _sender: *mut NSObject) {
             let mtm = MainThreadMarker::new().unwrap();
-            unsafe {
-                let panel = NSOpenPanel::openPanel(mtm);
-                panel.setCanChooseFiles(true);
-                panel.setCanChooseDirectories(false);
-                panel.setAllowsMultipleSelection(false);
+            let panel = NSOpenPanel::openPanel(mtm);
+            panel.setCanChooseFiles(true);
+            panel.setCanChooseDirectories(false);
+            panel.setAllowsMultipleSelection(false);
 
-                let response = panel.runModal();
-                if response == NSModalResponseOK {
-                    if let Some(url) = panel.URL() {
-                        if let Some(path_str) = url.path() {
-                            send_event(UserEvent::OpenFile(PathBuf::from(path_str.to_string())));
-                        }
+            let response = panel.runModal();
+            if response == NSModalResponseOK {
+                if let Some(url) = panel.URL() {
+                    if let Some(path_str) = url.path() {
+                        send_event(UserEvent::OpenFile(PathBuf::from(path_str.to_string())));
                     }
                 }
             }
@@ -168,20 +166,18 @@ define_class!(
         #[unsafe(method(openDirectory:))]
         fn open_directory(&self, _sender: *mut NSObject) {
             let mtm = MainThreadMarker::new().unwrap();
-            unsafe {
-                let panel = NSOpenPanel::openPanel(mtm);
-                panel.setCanChooseFiles(false);
-                panel.setCanChooseDirectories(true);
-                panel.setAllowsMultipleSelection(false);
+            let panel = NSOpenPanel::openPanel(mtm);
+            panel.setCanChooseFiles(false);
+            panel.setCanChooseDirectories(true);
+            panel.setAllowsMultipleSelection(false);
 
-                let response = panel.runModal();
-                if response == NSModalResponseOK {
-                    if let Some(url) = panel.URL() {
-                        if let Some(path_str) = url.path() {
-                            send_event(UserEvent::OpenDirectory(PathBuf::from(
-                                path_str.to_string(),
-                            )));
-                        }
+            let response = panel.runModal();
+            if response == NSModalResponseOK {
+                if let Some(url) = panel.URL() {
+                    if let Some(path_str) = url.path() {
+                        send_event(UserEvent::OpenDirectory(PathBuf::from(
+                            path_str.to_string(),
+                        )));
                     }
                 }
             }
@@ -215,6 +211,16 @@ define_class!(
         #[unsafe(method(helideTutor:))]
         fn tutor(&self, _sender: *mut NSObject) {
             send_event(UserEvent::Tutor);
+        }
+
+        #[unsafe(method(toggleTerminal:))]
+        fn toggle_terminal(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::ToggleTerminal);
+        }
+
+        #[unsafe(method(hideTerminal:))]
+        fn hide_terminal(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::HideTerminal);
         }
 
         #[unsafe(method(openRecentFile:))]
@@ -271,6 +277,11 @@ pub fn setup_menu_bar() {
         let edit_menu_item = NSMenuItem::new(mtm);
         edit_menu_item.setSubmenu(Some(&edit_menu));
         main_menu.addItem(&edit_menu_item);
+
+        let view_menu = create_view_menu(mtm, &handler);
+        let view_menu_item = NSMenuItem::new(mtm);
+        view_menu_item.setSubmenu(Some(&view_menu));
+        main_menu.addItem(&view_menu_item);
 
         let win_menu = create_window_menu(mtm);
         let win_menu_item = NSMenuItem::new(mtm);
@@ -430,6 +441,27 @@ unsafe fn create_edit_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     paste.setAction(Some(sel!(helidePaste:)));
     paste.setTarget(Some(handler));
     menu.addItem(&paste);
+
+    menu
+}
+
+unsafe fn create_view_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    menu.setTitle(ns_string!("View"));
+
+    let toggle = NSMenuItem::new(mtm);
+    toggle.setTitle(ns_string!("Terminal"));
+    toggle.setKeyEquivalent(ns_string!("`"));
+    toggle.setKeyEquivalentModifierMask(NSEventModifierFlags::Control);
+    toggle.setTarget(Some(handler));
+    toggle.setAction(Some(sel!(toggleTerminal:)));
+    menu.addItem(&toggle);
+
+    let hide = NSMenuItem::new(mtm);
+    hide.setTitle(ns_string!("Hide Terminal"));
+    hide.setTarget(Some(handler));
+    hide.setAction(Some(sel!(hideTerminal:)));
+    menu.addItem(&hide);
 
     menu
 }
