@@ -437,9 +437,6 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         let should_close = {
                             if let Some(hx_event) = input::convert_key_event(&event, &self.modifiers) {
                                 helide.handle_event(hx_event);
-                                if let Some(window) = &self.window {
-                                    window.set_title(&helide.title());
-                                }
                                 helide.editor.should_close()
                             } else {
                                 false
@@ -447,6 +444,8 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         };
                         if should_close {
                             self.shutdown(event_loop);
+                        } else if let Some(window) = &self.window {
+                            window.set_title(&helide.title());
                         }
                     }
                     app::Focus::Terminal => {
