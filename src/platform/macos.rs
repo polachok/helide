@@ -223,6 +223,11 @@ define_class!(
             send_event(UserEvent::HideTerminal);
         }
 
+        #[unsafe(method(helideQuit:))]
+        fn quit(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::Quit);
+        }
+
         #[unsafe(method(openRecentFile:))]
         fn open_recent_file(&self, sender: &NSMenuItem) {
             unsafe {
@@ -260,7 +265,7 @@ pub fn setup_menu_bar() {
     unsafe {
         let main_menu = NSMenu::new(mtm);
 
-        let app_menu = create_app_menu(mtm);
+        let app_menu = create_app_menu(mtm, &handler);
         let app_menu_item = NSMenuItem::new(mtm);
         app_menu_item.setSubmenu(Some(&app_menu));
         if let Some(services_menu) = app_menu.itemWithTitle(ns_string!("Services")) {
@@ -303,7 +308,7 @@ pub fn setup_menu_bar() {
     });
 }
 
-unsafe fn create_app_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+unsafe fn create_app_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     let process_name = NSProcessInfo::processInfo().processName();
 
@@ -346,7 +351,8 @@ unsafe fn create_app_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let quit = NSMenuItem::new(mtm);
     quit.setTitle(&ns_string!("Quit ").stringByAppendingString(&process_name));
     quit.setKeyEquivalent(ns_string!("q"));
-    quit.setAction(Some(sel!(terminate:)));
+    quit.setTarget(Some(handler));
+    quit.setAction(Some(sel!(helideQuit:)));
     menu.addItem(&quit);
 
     menu
@@ -540,6 +546,18 @@ pub fn register_open_file_handler() {
         objc2::runtime::Bool::YES
     }
 
+    // Intercept applicationShouldTerminate: to do graceful shutdown via our event loop
+    unsafe extern "C-unwind" fn handle_should_terminate(
+        _this: &mut AnyObject,
+        _sel: objc2::runtime::Sel,
+        _sender: &AnyObject,
+    ) -> usize {
+        // Send Quit through our event loop for graceful shutdown
+        send_event(UserEvent::Quit);
+        // Return NSTerminateCancel (0) — we handle quitting ourselves
+        0
+    }
+
     let mtm = MainThreadMarker::new().expect("must be called on main thread");
 
     unsafe {
@@ -556,6 +574,10 @@ pub fn register_open_file_handler() {
         my_class.add_method(
             sel!(applicationShouldHandleReopen:hasVisibleWindows:),
             handle_reopen as unsafe extern "C-unwind" fn(_, _, _, _) -> _,
+        );
+        my_class.add_method(
+            sel!(applicationShouldTerminate:),
+            handle_should_terminate as unsafe extern "C-unwind" fn(_, _, _) -> _,
         );
         let class = my_class.register();
 

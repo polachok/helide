@@ -37,6 +37,7 @@ pub enum UserEvent {
     Tutor,
     ToggleTerminal,
     HideTerminal,
+    Quit,
 }
 
 struct WinitApp {
@@ -341,6 +342,24 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                 if let Some(helide) = &mut self.helide {
                     helide.hide_terminal();
                 }
+            }
+            UserEvent::Quit => {
+                if let Some(helide) = &mut self.helide {
+                    let has_unsaved = helide.editor.documents().any(|doc| doc.is_modified());
+                    if has_unsaved {
+                        // Show window so the user can see the warning
+                        if let Some(window) = &self.window {
+                            window.set_visible(true);
+                            window.focus_window();
+                        }
+                        helide
+                            .editor
+                            .set_error("Unsaved changes. Use :w to save or :q! to force quit.");
+                        helide.render();
+                        return;
+                    }
+                }
+                self.shutdown(event_loop);
             }
             UserEvent::CloseBuffer => {
                 if let Some(helide) = &mut self.helide {
