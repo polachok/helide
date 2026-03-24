@@ -164,8 +164,22 @@ impl HelideApp {
         self.render();
     }
 
-    /// Toggle the terminal pane on/off.
+    /// Toggle terminal: if hidden → open + focus. If visible → swap focus between panes.
     pub fn toggle_terminal(&mut self) {
+        if self.layout.terminal_visible {
+            // Swap focus
+            self.focus = match self.focus {
+                Focus::Editor => Focus::Terminal,
+                Focus::Terminal => Focus::Editor,
+            };
+            if let Some(pane) = &mut self.terminal_pane {
+                pane.dirty = true;
+            }
+            self.render();
+            return;
+        }
+
+        // Terminal hidden — open it
         let now_visible = self.layout.toggle_terminal();
 
         if now_visible && self.terminal_pane.is_none() {
