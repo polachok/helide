@@ -38,6 +38,8 @@ pub enum UserEvent {
     ToggleTerminal,
     HideTerminal,
     Quit,
+    OpenHelideSettings,
+    OpenHelixSettings,
 }
 
 struct WinitApp {
@@ -361,6 +363,41 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                     }
                 }
                 self.shutdown(event_loop);
+            }
+            UserEvent::OpenHelideSettings => {
+                let path = crate::config::config_path();
+                if !path.exists() {
+                    // Create default config file
+                    let _ = std::fs::create_dir_all(path.parent().unwrap());
+                    let _ = std::fs::write(&path, "# Helide configuration\n\n[font]\n# family = \"monospace\"\n# size = 14.0\n\n[terminal]\n# split_ratio = 0.7\n");
+                }
+                if let Some(helide) = &mut self.helide {
+                    let action = helide.open_action();
+                    if let Err(e) = helide.editor.open(&path, action) {
+                        helide.editor.set_error(format!("Failed to open: {e}"));
+                    }
+                    helide.render();
+                    if let Some(window) = &self.window {
+                        window.set_title(&helide.title());
+                    }
+                }
+            }
+            UserEvent::OpenHelixSettings => {
+                let path = helix_loader::config_dir().join("config.toml");
+                if !path.exists() {
+                    let _ = std::fs::create_dir_all(path.parent().unwrap());
+                    let _ = std::fs::write(&path, "# Helix configuration\n# See https://docs.helix-editor.com/configuration.html\n");
+                }
+                if let Some(helide) = &mut self.helide {
+                    let action = helide.open_action();
+                    if let Err(e) = helide.editor.open(&path, action) {
+                        helide.editor.set_error(format!("Failed to open: {e}"));
+                    }
+                    helide.render();
+                    if let Some(window) = &self.window {
+                        window.set_title(&helide.title());
+                    }
+                }
             }
             UserEvent::CloseBuffer => {
                 if let Some(helide) = &mut self.helide {

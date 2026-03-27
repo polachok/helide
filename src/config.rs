@@ -52,7 +52,7 @@ impl HelideConfig {
     }
 }
 
-fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     // Check XDG-style first (~/.config/helide), then platform config dir
     let candidates = [
         dirs::home_dir().map(|d| d.join(".config/helide/config.toml")),

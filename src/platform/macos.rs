@@ -228,6 +228,16 @@ define_class!(
             send_event(UserEvent::Quit);
         }
 
+        #[unsafe(method(openHelideSettings:))]
+        fn open_helide_settings(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::OpenHelideSettings);
+        }
+
+        #[unsafe(method(openHelixSettings:))]
+        fn open_helix_settings(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::OpenHelixSettings);
+        }
+
         #[unsafe(method(openRecentFile:))]
         fn open_recent_file(&self, sender: &NSMenuItem) {
             unsafe {
@@ -399,6 +409,21 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     open_dir.setAction(Some(sel!(openDirectory:)));
     open_dir.setTarget(Some(handler));
     menu.addItem(&open_dir);
+
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+    let helide_settings = NSMenuItem::new(mtm);
+    helide_settings.setTitle(ns_string!("Open Helide Settings"));
+    helide_settings.setKeyEquivalent(ns_string!(","));
+    helide_settings.setTarget(Some(handler));
+    helide_settings.setAction(Some(sel!(openHelideSettings:)));
+    menu.addItem(&helide_settings);
+
+    let helix_settings = NSMenuItem::new(mtm);
+    helix_settings.setTitle(ns_string!("Open Helix Settings"));
+    helix_settings.setTarget(Some(handler));
+    helix_settings.setAction(Some(sel!(openHelixSettings:)));
+    menu.addItem(&helix_settings);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 
