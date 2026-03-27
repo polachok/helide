@@ -390,6 +390,7 @@ pub struct Renderer {
     pub padding_x: f32,
     pub padding_y: f32,
     pub padding_top: f32,
+    pub padding_bottom: f32,
     pub default_fg: [f32; 4],
     pub default_bg: [f32; 4],
     /// Foreground dim factor (1.0 = normal, <1.0 = dimmed). Applied to text/decorations.
@@ -679,8 +680,9 @@ impl Renderer {
 
         // Center the grid: distribute remainder pixels as padding
         let padding_top = 0.0; // set via set_padding_top() for transparent titlebar
+        let padding_bottom = 3.0; // reserve 3px at the bottom of the editor pane
         let padding_x = (config.width as f32 % cell_width) / 2.0;
-        let padding_y = ((config.height as f32 - padding_top) % cell_height) / 2.0 + padding_top;
+        let padding_y = ((config.height as f32 - padding_top - padding_bottom) % cell_height) / 2.0 + padding_top;
 
         Renderer {
             device,
@@ -701,6 +703,7 @@ impl Renderer {
             padding_x,
             padding_y,
             padding_top,
+            padding_bottom,
             default_fg,
             default_bg,
             fg_dim: 1.0,
@@ -728,7 +731,7 @@ impl Renderer {
 
         self.padding_x = (width as f32 % self.cell_width) / 2.0;
         self.padding_y =
-            ((height as f32 - self.padding_top) % self.cell_height) / 2.0 + self.padding_top;
+            ((height as f32 - self.padding_top - self.padding_bottom) % self.cell_height) / 2.0 + self.padding_top;
     }
 
     pub fn build_instances(
@@ -1060,7 +1063,7 @@ impl Renderer {
         let saved_padding_y = self.padding_y;
         self.padding_x = (region_width as f32 % self.cell_width) / 2.0;
         self.padding_y =
-            ((region_height as f32 - self.padding_top) % self.cell_height) / 2.0 + self.padding_top;
+            ((region_height as f32 - self.padding_top - self.padding_bottom) % self.cell_height) / 2.0 + self.padding_top;
 
         self.build_instances(
             grid,

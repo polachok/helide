@@ -25,7 +25,7 @@ pub struct GpuBackend {
 impl GpuBackend {
     pub fn new(renderer: Renderer) -> Self {
         let cols = (renderer.config.width as f32 / renderer.cell_width) as u16;
-        let usable_height = renderer.config.height as f32 - renderer.padding_top;
+        let usable_height = renderer.config.height as f32 - renderer.padding_top - renderer.padding_bottom;
         let rows = (usable_height / renderer.cell_height) as u16;
         let grid = vec![Cell::default(); (cols as usize) * (rows as usize)];
 
@@ -65,7 +65,7 @@ impl GpuBackend {
     /// Call `handle_window_resize()` for actual window resize.
     pub fn handle_resize(&mut self, width: u32, height: u32) {
         let new_cols = (width as f32 / self.renderer.cell_width) as u16;
-        let usable_height = height as f32 - self.renderer.padding_top;
+        let usable_height = height as f32 - self.renderer.padding_top - self.renderer.padding_bottom;
         let new_rows = (usable_height / self.renderer.cell_height) as u16;
         if new_cols != self.cols || new_rows != self.rows {
             self.cols = new_cols;
