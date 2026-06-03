@@ -59,8 +59,20 @@ mkdir -p "${APP_RESOURCES_DIR}"
 cp -fRp "${APP_TEMPLATE}/Contents/Info.plist" "${APP_DIR}/${APP_NAME}/Contents/"
 cp -fp "${RELEASE_BINARY}" "${APP_BINARY_DIR}/${BUNDLE_BINARY_NAME}"
 
-# Copy icon if it exists
-if [ -f "${APP_TEMPLATE}/Contents/Resources/Helide.icns" ]; then
+# Generate a squircle-masked .icns from icon.png (matches macOS Big Sur+ shape
+# so the icon doesn't render as a plain square on Sequoia and earlier).
+ICON_SRC="icon.png"
+ICON_OUT="${RELEASE_DIR}/Helide.icns"
+if [ -f "${ICON_SRC}" ]; then
+  echo "Generating ${ICON_OUT}..."
+  if command -v nix-shell &> /dev/null; then
+    nix-shell -p python3Packages.pillow --run \
+      "python3 extra/osx/make_icon.py '${ICON_SRC}' '${ICON_OUT}'"
+  else
+    python3 extra/osx/make_icon.py "${ICON_SRC}" "${ICON_OUT}"
+  fi
+  cp -fp "${ICON_OUT}" "${APP_RESOURCES_DIR}/Helide.icns"
+elif [ -f "${APP_TEMPLATE}/Contents/Resources/Helide.icns" ]; then
   cp -fp "${APP_TEMPLATE}/Contents/Resources/Helide.icns" "${APP_RESOURCES_DIR}/"
 fi
 
