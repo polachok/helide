@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Build a macOS squircle-masked .icns from a source PNG.
+"""Build a macOS app .icns from a source PNG using Apple's icon template.
 
-Usage: make_icon.py <source.png> <output.icns>
+Usage: make_icon.py <source.png> <template.png> <output.icns>
 
-Mirrors Apple's macOS icon grid (Big Sur+): art occupies an 824x824 region
-centered inside a 1024x1024 squircle canvas. Requires `iconutil` (macOS) and
-Pillow.
+The template is Apple's "Template - Icon - App.png" (from
+developer.apple.com/design/resources) — a 1024x1024 image with a white
+squircle (RGB=255 where the artwork should go) on a transparent background
+with the official drop shadow baked in. We paste the source PNG into the
+squircle region using the template's R channel as the mask, which preserves
+the shadow.
 """
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
-from PIL import Image, ImageDraw
-
-CANVAS = 1024
-ART = 824       # squircle size inside the canvas (Apple's macOS template)
-RADIUS = 181    # corner radius for an 824-wide squircle (~22% of ART)
+from PIL import Image
 
 SIZES = [
     ("icon_16x16.png", 16),
@@ -32,29 +30,37 @@ SIZES = [
 ]
 
 
-def squircle_mask(size, radius):
-    scale = 4
-    s = size * scale
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, s - 1, s - 1), radius=radius * scale, fill=255)
-    return mask.resize((size, size), Image.LANCZOS)
+def squircle_bbox(template):
+    """Bounding box of the opaque-white squircle region in the template."""
+    r = template.getchannel("R")
+    a = template.getchannel("A")
+    # White-and-opaque pixels mark the artwork region
+    mask = Image.eval(r, lambda v: 255 if v > 250 else 0)
+    mask = Image.eval(Image.merge("LA", (mask, a)).getchannel("L"), lambda v: v)
+    return mask.getbbox(), mask
 
 
-def build_master(src_path):
-    src = Image.open(src_path).convert("RGBA").resize((ART, ART), Image.LANCZOS)
-    masked = Image.new("RGBA", (ART, ART), (0, 0, 0, 0))
-    masked.paste(src, (0, 0), squircle_mask(ART, RADIUS))
-    out = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-    offset = (CANVAS - ART) // 2
-    out.paste(masked, (offset, offset), masked)
+def build_master(src_path, template_path):
+    template = Image.open(template_path).convert("RGBA")
+    bbox, squircle = squircle_bbox(template)
+    x0, y0, x1, y1 = bbox
+    art_size = (x1 - x0, y1 - y0)
+
+    src = Image.open(src_path).convert("RGBA").resize(art_size, Image.LANCZOS)
+
+    out = template.copy()
+    # Paste source inside the squircle, using the squircle as alpha mask so
+    # the artwork is clipped to the squircle shape and the shadow is kept.
+    region_mask = squircle.crop(bbox)
+    out.paste(src, (x0, y0), region_mask)
     return out
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("usage: make_icon.py <source.png> <output.icns>")
-    src_path, icns_out = sys.argv[1], sys.argv[2]
-    master = build_master(src_path)
+    if len(sys.argv) != 4:
+        sys.exit("usage: make_icon.py <source.png> <template.png> <output.icns>")
+    src_path, template_path, icns_out = sys.argv[1:4]
+    master = build_master(src_path, template_path)
     with tempfile.TemporaryDirectory() as tmp:
         iconset = os.path.join(tmp, "Helide.iconset")
         os.makedirs(iconset)
