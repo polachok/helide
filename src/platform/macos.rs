@@ -145,6 +145,11 @@ define_class!(
             send_event(UserEvent::NewFile);
         }
 
+        #[unsafe(method(newWindow:))]
+        fn new_window(&self, _sender: *mut NSObject) {
+            send_event(UserEvent::NewWindow);
+        }
+
         #[unsafe(method(openFile:))]
         fn open_file(&self, _sender: *mut NSObject) {
             let mtm = MainThreadMarker::new().unwrap();
@@ -378,6 +383,13 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     new.setAction(Some(sel!(newFile:)));
     new.setTarget(Some(handler));
     menu.addItem(&new);
+
+    let new_window = NSMenuItem::new(mtm);
+    new_window.setTitle(ns_string!("New Window"));
+    new_window.setKeyEquivalent(ns_string!("N"));
+    new_window.setAction(Some(sel!(newWindow:)));
+    new_window.setTarget(Some(handler));
+    menu.addItem(&new_window);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 

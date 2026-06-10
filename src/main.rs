@@ -27,6 +27,7 @@ use crate::renderer::Renderer;
 pub enum UserEvent {
     Redraw,
     NewFile,
+    NewWindow,
     OpenFile(PathBuf),
     OpenDirectory(PathBuf),
     Save,
@@ -251,6 +252,9 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         .new_file(helix_view::editor::Action::VerticalSplit);
                     helide.render();
                 }
+            }
+            UserEvent::NewWindow => {
+                spawn_new_window();
             }
             UserEvent::OpenFile(path) => {
                 if let Some(helide) = &mut self.helide {
@@ -646,6 +650,32 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             _ => {}
         }
     }
+}
+
+/// Launch a fresh, fully independent helide process — its own editor, LSP,
+/// terminal, and window. "New Window" deliberately means a separate process
+/// rather than an in-process second window.
+fn spawn_new_window() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        // When running inside a `.app` bundle, `open -n` launches a brand-new
+        // instance instead of activating the existing one.
+        // current_exe is .../Helide.app/Contents/MacOS/helide
+        if let Some(bundle) = exe
+            .ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+        {
+            let _ = std::process::Command::new("open").arg("-n").arg(bundle).spawn();
+            return;
+        }
+    }
+
+    // Dev mode (cargo run) or a non-bundled binary: spawn the executable directly.
+    let _ = std::process::Command::new(exe).spawn();
 }
 
 /// Inherit PATH from the user's login shell.
