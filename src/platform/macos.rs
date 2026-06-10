@@ -48,8 +48,6 @@ pub fn flush_pending_files() {
     }
 }
 
-/// Note a file as recently opened (shows in File > Open Recent).
-/// Note a file as recently opened and refresh the Open Recent menu.
 /// Set window appearance (light/dark) based on background luminance.
 /// This affects titlebar text color and traffic light styling.
 pub fn set_window_appearance_for_bg(bg: [f32; 4]) {
@@ -67,12 +65,58 @@ pub fn set_window_appearance_for_bg(bg: [f32; 4]) {
     app.setAppearance(appearance.as_deref());
 }
 
-pub fn note_recent_document(path: &std::path::Path) {
-    use objc2_foundation::NSURL;
+/// A single unified "Open Recent" list holds both files and directories,
+/// ordered by recency. Each entry is persisted as a single string whose
+/// first character tags the kind — 'f' for file, 'd' for directory — with
+/// the path following. This lets a click route to the right open action and
+/// stays correct even if the path is temporarily missing on disk.
+const RECENT_ITEMS_KEY: &str = "HelideRecentItems";
+const MAX_RECENT_ITEMS: usize = 20;
+
+fn read_recent_items() -> Vec<String> {
+    let key = NSString::from_str(RECENT_ITEMS_KEY);
+    let defaults = NSUserDefaults::standardUserDefaults();
+    defaults
+        .stringArrayForKey(&key)
+        .map(|arr| arr.iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn write_recent_items(items: &[String]) {
+    let key = NSString::from_str(RECENT_ITEMS_KEY);
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let ns: Vec<Retained<NSString>> = items.iter().map(|s| NSString::from_str(s)).collect();
+    let array = NSArray::from_retained_slice(&ns);
+    unsafe { defaults.setObject_forKey(Some(&array), &key) };
+}
+
+fn note_recent(tag: char, path: &std::path::Path) {
     let mtm = MainThreadMarker::new().unwrap();
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-    NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
+    let path_str = path.to_string_lossy();
+    let entry = format!("{tag}{path_str}");
+
+    let mut items = read_recent_items();
+    // Move-to-front, dedup by path (the entry minus its 1-char kind tag).
+    items.retain(|e| e.get(1..) != Some(path_str.as_ref()));
+    items.insert(0, entry);
+    items.truncate(MAX_RECENT_ITEMS);
+    write_recent_items(&items);
+
     refresh_recent_menu(mtm);
+}
+
+/// Record a file as recently opened (persisted) and refresh the menu.
+pub fn note_recent_file(path: &std::path::Path) {
+    note_recent('f', path);
+    // Also feed the system list so it shows in the Dock/Finder Recents.
+    let mtm = MainThreadMarker::new().unwrap();
+    let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
+}
+
+/// Record a directory as recently opened (persisted) and refresh the menu.
+pub fn note_recent_directory(path: &std::path::Path) {
+    note_recent('d', path);
 }
 
 fn refresh_recent_menu(mtm: MainThreadMarker) {
@@ -82,43 +126,61 @@ fn refresh_recent_menu(mtm: MainThreadMarker) {
 
         menu.removeAllItems();
 
-        let doc_controller = NSDocumentController::sharedDocumentController(mtm);
-        let urls = doc_controller.recentDocumentURLs();
+        let items = read_recent_items();
 
-        for url in urls.iter() {
+        if items.is_empty() {
+            // Disabled placeholder so the submenu isn't blank (matches macOS).
+            let empty = NSMenuItem::new(mtm);
+            empty.setTitle(ns_string!("No Recent Items"));
+            empty.setEnabled(false);
+            menu.addItem(&empty);
+            return;
+        }
+
+        for entry in &items {
+            let Some(tag) = entry.chars().next() else { continue };
+            let path = &entry[tag.len_utf8()..];
+
+            // Show the leaf name; directories get a trailing "/" as a hint.
+            let mut display = std::path::Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string());
+            if tag == 'd' {
+                display.push('/');
+            }
+
+            let item = NSMenuItem::new(mtm);
+            item.setTitle(&NSString::from_str(&display));
+            // Stash the full tagged entry so the handler knows the kind + path.
+            let represented = NSString::from_str(entry);
             unsafe {
-                let Some(path) = url.path() else { continue };
-                let item = NSMenuItem::new(mtm);
-                // Show just the filename
-                if let Some(last) = url.lastPathComponent() {
-                    item.setTitle(&last);
-                } else {
-                    item.setTitle(&path);
-                }
-                item.setRepresentedObject(Some(&url));
-                item.setAction(Some(sel!(openRecentFile:)));
-                // Target the menu handler
+                item.setRepresentedObject(Some(&represented));
+                item.setAction(Some(sel!(openRecent:)));
                 MENU_HANDLER.with(|h| {
                     if let Some(handler) = h.borrow().as_ref() {
                         item.setTarget(Some(handler));
                     }
                 });
-                menu.addItem(&item);
             }
+            menu.addItem(&item);
         }
 
-        if !urls.is_empty() {
+        if !items.is_empty() {
             menu.addItem(&NSMenuItem::separatorItem(mtm));
-        }
 
-        let clear = NSMenuItem::new(mtm);
-        clear.setTitle(ns_string!("Clear Menu"));
-        unsafe {
-            clear.setAction(Some(sel!(clearRecentDocuments:)));
-            let doc_controller = NSDocumentController::sharedDocumentController(mtm);
-            clear.setTarget(Some(&doc_controller));
+            let clear = NSMenuItem::new(mtm);
+            clear.setTitle(ns_string!("Clear Menu"));
+            unsafe {
+                clear.setAction(Some(sel!(clearRecent:)));
+                MENU_HANDLER.with(|h| {
+                    if let Some(handler) = h.borrow().as_ref() {
+                        clear.setTarget(Some(handler));
+                    }
+                });
+            }
+            menu.addItem(&clear);
         }
-        menu.addItem(&clear);
     });
 }
 
@@ -148,6 +210,31 @@ define_class!(
         #[unsafe(method(newWindow:))]
         fn new_window(&self, _sender: *mut NSObject) {
             send_event(UserEvent::NewWindow);
+        }
+
+        #[unsafe(method(openRecent:))]
+        fn open_recent(&self, sender: &NSMenuItem) {
+            unsafe {
+                let Some(obj) = sender.representedObject() else { return };
+                // representedObject is the tagged entry: a kind char + the path.
+                let entry: &NSString = &*(Retained::as_ptr(&obj) as *const NSString);
+                let entry = entry.to_string();
+                let mut chars = entry.chars();
+                let tag = chars.next();
+                let path = PathBuf::from(chars.as_str());
+                match tag {
+                    Some('d') => send_event(UserEvent::OpenDirectory(path)),
+                    _ => send_event(UserEvent::OpenFile(path)),
+                }
+            }
+        }
+
+        #[unsafe(method(clearRecent:))]
+        fn clear_recent(&self, _sender: *mut NSObject) {
+            let mtm = MainThreadMarker::new().unwrap();
+            let key = NSString::from_str(RECENT_ITEMS_KEY);
+            NSUserDefaults::standardUserDefaults().removeObjectForKey(&key);
+            refresh_recent_menu(mtm);
         }
 
         #[unsafe(method(openFile:))]
@@ -242,20 +329,6 @@ define_class!(
         fn open_helix_settings(&self, _sender: *mut NSObject) {
             send_event(UserEvent::OpenHelixSettings);
         }
-
-        #[unsafe(method(openRecentFile:))]
-        fn open_recent_file(&self, sender: &NSMenuItem) {
-            unsafe {
-                use objc2_foundation::NSURL;
-                if let Some(obj) = sender.representedObject() {
-                    // representedObject is the NSURL
-                    let url: &NSURL = &*(Retained::as_ptr(&obj) as *const NSURL);
-                    if let Some(path) = url.path() {
-                        send_event(UserEvent::OpenFile(PathBuf::from(path.to_string())));
-                    }
-                }
-            }
-        }
     }
 );
 
@@ -276,6 +349,11 @@ pub fn setup_menu_bar() {
     let app = NSApplication::sharedApplication(mtm);
 
     let handler = MenuHandler::new(mtm);
+    // Must be set before building menus: refresh_recent_menu() reads this to
+    // target the recent-item actions, otherwise those items render disabled.
+    MENU_HANDLER.with(|cell| {
+        *cell.borrow_mut() = Some(handler.clone());
+    });
 
     unsafe {
         let main_menu = NSMenu::new(mtm);
@@ -317,10 +395,6 @@ pub fn setup_menu_bar() {
 
         app.setMainMenu(Some(&main_menu));
     }
-
-    MENU_HANDLER.with(|cell| {
-        *cell.borrow_mut() = Some(handler);
-    });
 }
 
 unsafe fn create_app_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Retained<NSMenu> {
@@ -400,7 +474,14 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
     open.setTarget(Some(handler));
     menu.addItem(&open);
 
-    // Open Recent submenu
+    let open_dir = NSMenuItem::new(mtm);
+    open_dir.setTitle(ns_string!("Open Folder..."));
+    open_dir.setKeyEquivalent(ns_string!("O"));
+    open_dir.setAction(Some(sel!(openDirectory:)));
+    open_dir.setTarget(Some(handler));
+    menu.addItem(&open_dir);
+
+    // Open Recent submenu — unified list of recently opened files and folders
     let recent_menu = NSMenu::new(mtm);
     recent_menu.setTitle(ns_string!("Open Recent"));
     let recent_item = NSMenuItem::new(mtm);
@@ -412,15 +493,8 @@ unsafe fn create_file_menu(mtm: MainThreadMarker, handler: &MenuHandler) -> Reta
         *cell.borrow_mut() = Some(recent_menu);
     });
 
-    // Populate from existing recent documents
+    // Populate from the persisted recent list
     refresh_recent_menu(mtm);
-
-    let open_dir = NSMenuItem::new(mtm);
-    open_dir.setTitle(ns_string!("Open Directory..."));
-    open_dir.setKeyEquivalent(ns_string!("O"));
-    open_dir.setAction(Some(sel!(openDirectory:)));
-    open_dir.setTarget(Some(handler));
-    menu.addItem(&open_dir);
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
 

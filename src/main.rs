@@ -263,7 +263,7 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                         helide.editor.set_error(format!("Failed to open: {e}"));
                     } else {
                         #[cfg(target_os = "macos")]
-                        platform::macos::note_recent_document(&path);
+                        platform::macos::note_recent_file(&path);
                     }
                     helide.render();
                     if let Some(window) = &self.window {
@@ -278,6 +278,8 @@ impl ApplicationHandler<UserEvent> for WinitApp {
                             .editor
                             .set_error(format!("Failed to change directory: {e}"));
                     } else {
+                        #[cfg(target_os = "macos")]
+                        platform::macos::note_recent_directory(&path);
                         let has_envrc = path.join(".envrc").exists();
                         helide
                             .editor
