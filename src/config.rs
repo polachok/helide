@@ -6,6 +6,19 @@ use std::path::PathBuf;
 pub struct HelideConfig {
     pub font: FontConfig,
     pub terminal: TerminalConfig,
+    pub option_as_alt: OptionAsAlt,
+}
+
+/// Which macOS Option keys act as Alt instead of composing characters
+/// (e.g. Option+u, u -> ü). Same semantics as Alacritty's `option_as_alt`.
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionAsAlt {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
 }
 
 #[derive(Debug, Deserialize)]

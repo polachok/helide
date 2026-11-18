@@ -102,6 +102,8 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             return;
         }
 
+        let helide_config = crate::config::HelideConfig::load();
+
         let mut attrs = Window::default_attributes()
             .with_title("helide")
             .with_inner_size(winit::dpi::LogicalSize::new(1200.0, 800.0));
@@ -115,6 +117,21 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         }
 
         let window = Arc::new(event_loop.create_window(attrs).unwrap());
+
+        // Let macOS compose dead keys / Option combos (Option+u, u -> ü); the
+        // result arrives as Ime::Commit.
+        window.set_ime_allowed(true);
+        #[cfg(target_os = "macos")]
+        {
+            use crate::config::OptionAsAlt as Cfg;
+            use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
+            window.set_option_as_alt(match helide_config.option_as_alt {
+                Cfg::None => OptionAsAlt::None,
+                Cfg::Left => OptionAsAlt::OnlyLeft,
+                Cfg::Right => OptionAsAlt::OnlyRight,
+                Cfg::Both => OptionAsAlt::Both,
+            });
+        }
 
         // Create wgpu surface + device
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -167,7 +184,6 @@ impl ApplicationHandler<UserEvent> for WinitApp {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let helide_config = crate::config::HelideConfig::load();
         let scale_factor = window.scale_factor() as f32;
         let mut renderer = Renderer::new(
             device,
@@ -467,6 +483,26 @@ impl ApplicationHandler<UserEvent> for WinitApp {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods;
+            }
+            WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+                match helide.focus {
+                    app::Focus::Editor => {
+                        for ch in text.chars() {
+                            helide.handle_event(Event::Key(helix_view::input::KeyEvent {
+                                code: helix_view::keyboard::KeyCode::Char(ch),
+                                modifiers: helix_view::keyboard::KeyModifiers::NONE,
+                            }));
+                        }
+                        if let Some(window) = &self.window {
+                            window.set_title(&helide.title());
+                        }
+                    }
+                    app::Focus::Terminal => {
+                        if let Some(pane) = &helide.terminal_pane {
+                            pane.write_to_pty(text.as_bytes());
+                        }
+                    }
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Global: toggle terminal
